@@ -1,0 +1,16 @@
+.build/
+build/
+dist/
+*.o
+*.a
+*.so
+.swiftpm/
+.derivedData/
+node_modules/
+*.pcap
+*.pcapng
+*.tcpviewsession
+.env
+*.local.xcconfig
+compile_commands.json
+.cache/

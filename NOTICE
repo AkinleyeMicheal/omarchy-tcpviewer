@@ -1,0 +1,26 @@
+Omarchy TCPViewer
+Copyright (C) 2026 fonsgaudii
+
+This project is a Linux/Omarchy port of TCP Viewer, originally created by
+Proxyman LLC and published at https://github.com/ProxymanApp/TCPViewer
+
+Licensed under the GNU General Public License version 2 or any later version
+(GPL-2.0-or-later), in line with the upstream license and its use of the
+Wireshark libraries.
+
+Portions of this project (PcapPlusPlusCore and related capture/dissection
+code) are derived from TCP Viewer by Proxyman LLC, used under the terms of
+the GPL-2.0-or-later license. Original copyright headers are preserved in
+all derived source files.
+
+Third-party components:
+- Wireshark libraries (libwireshark, libwiretap, libwsutil) — GPL-2.0-or-later
+  — https://www.wireshark.org — Wireshark is a trademark of the Wireshark
+  Foundation. This project is not affiliated with or endorsed by the Wireshark
+  Foundation.
+- PcapPlusPlus — other permissive license — https://github.com/seladb/PcapPlusPlus
+- libpcap — BSD-3-Clause — https://www.tcpdump.org
+- HexFiend (reference only; not linked) — BSD-2-Clause
+
+"TCP Viewer" is a trademark of Proxyman LLC. This project is named
+"Omarchy TCPViewer" to avoid confusion and is not affiliated with Proxyman LLC.
