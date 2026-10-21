@@ -81,7 +81,9 @@ final class PCPPNativeCore {
             cursor = entry.ifa_next
         }
 
-        return builders.values.map { builder in
+        // Deterministic order (Dictionary iteration is unordered — the
+        // interface list must not jitter between refreshes).
+        return builders.values.sorted { $0.name < $1.name }.map { builder in
             let isLoopback = (builder.flags & UInt32(IFF_LOOPBACK)) != 0 || builder.name.hasPrefix("lo")
             let isUp = (builder.flags & UInt32(IFF_UP)) != 0
             let linkType: PCPPNativeLinkType = isLoopback ? .loopback : .ethernet
@@ -91,8 +93,11 @@ final class PCPPNativeCore {
                 identifier: builder.name,
                 technicalName: builder.name,
                 displayName: builder.name,
-                friendlyName: builder.name,
-                interfaceDescription: builder.name,
+                // Linux/libpcap provides no friendly name or description —
+                // don't fake one with a copy of the technical name (that
+                // would defeat normalizedName() and the sysfs resolver).
+                friendlyName: nil,
+                interfaceDescription: nil,
                 loopback: isLoopback,
                 availability: availability,
                 availabilityReason: reason,
@@ -101,8 +106,11 @@ final class PCPPNativeCore {
                 activityPreview: PCPPNativeActivityPreviewDescriptor(packetsPerSecond: nil, observedAt: nil),
                 canCapture: true,
                 supportsPromiscuousMode: !isLoopback,
-                requiresBPFPermissionSetup: true,
-                providesMacOSMetadata: true
+                // No per-interface BPF permission setup exists on Linux
+                // (macOS System Settings concept); capture privilege is
+                // binary-scoped via file capabilities on tcpviewerd.
+                requiresBPFPermissionSetup: false,
+                providesMacOSMetadata: false
             )
         }
     }

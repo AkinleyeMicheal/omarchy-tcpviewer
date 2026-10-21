@@ -582,9 +582,60 @@ enum NativeBridgeMapper {
 }
 
 private enum SystemNetworkInterfaceNameResolver {
-    // Linux port: macOS SCNetworkService name resolution is unavailable.
-    // Phase 3 replaces this with getifaddrs/NetworkManager-based naming.
-    static func friendlyName(for technicalName: String) -> String? { nil }
+    // Linux replacement for macOS SCNetworkService aliasing: classify the
+    // interface from sysfs (kernel truth, no subprocess/DBus in the core).
+    // Returns the role label ("Wi-Fi", "Ethernet", "Loopback") which the
+    // caller combines with the technical name ("Wi-Fi (wlan0)").
+    static func friendlyName(for technicalName: String) -> String? {
+        // Defense in depth: the name becomes a /sys path segment — allow
+        // only kernel-valid interface-name characters (IFNAMSIZ = 16).
+        guard isValidInterfaceName(technicalName),
+              FileManager.default.fileExists(atPath: "/sys/class/net/\(technicalName)") else {
+            return nil
+        }
+
+        // Wi-Fi: cfg80211 creates a `wireless` dir for managed Wi-Fi ifaces.
+        if FileManager.default.fileExists(atPath: "/sys/class/net/\(technicalName)/wireless") {
+            return "Wi-Fi"
+        }
+
+        // ARPHRD type from sysfs: 772 = loopback, 1 = Ethernet.
+        if let typeValue = try? String(contentsOfFile: "/sys/class/net/\(technicalName)/type", encoding: .utf8),
+            let type = UInt32(typeValue.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            switch type {
+            case 772:
+                return "Loopback"
+            case 1:
+                // Virtual devices (docker/veth/tun/...) display as the bare
+                // technical name — "Ethernet (docker0)" would be noise.
+                return isVirtualInterface(technicalName) ? nil : "Ethernet"
+            default:
+                return nil
+            }
+        }
+        return nil
+    }
+
+    // Same charset the kernel accepts for interface names; rejects path
+    // separators and "." / ".." before any sysfs lookup.
+    private static func isValidInterfaceName(_ name: String) -> Bool {
+        guard !name.isEmpty, name.count <= 15, name != ".", name != ".." else { return false }
+        return name.utf8.allSatisfy { byte in
+            (0x41...0x5A).contains(byte)  // A-Z
+                || (0x61...0x7A).contains(byte)  // a-z
+                || (0x30...0x39).contains(byte)  // 0-9
+                || byte == 0x5F || byte == 0x2D || byte == 0x2E || byte == 0x3A  // _ - . :
+        }
+    }
+
+    // Predictable-name prefixes of software/virtual devices.
+    private static func isVirtualInterface(_ name: String) -> Bool {
+        let virtualPrefixes = [
+            "docker", "veth", "virbr", "br-", "tun", "tap", "wg", "zt",
+            "cni", "flannel", "lxc", "podman", "nftb", "vnet", "macvtap",
+        ]
+        return virtualPrefixes.contains { name.hasPrefix($0) }
+    }
 
     static func normalizedName(_ name: String?, technicalName: String) -> String? {
         guard let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines),
