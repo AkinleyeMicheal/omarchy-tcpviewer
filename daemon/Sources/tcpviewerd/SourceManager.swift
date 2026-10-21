@@ -772,9 +772,10 @@ final class SourceManager: @unchecked Sendable {
             return
         }
 
-        // Bounded chunk (5000 ids) keeps a single Wireshark evaluation short.
+        // Upstream evaluates display filters in 128-id batches
+        // (WorkspaceFoundation); the core rejects larger batches.
         let start = source.filterEvaluatedCount
-        let end = min(start + 5_000, source.summaries.count)
+        let end = min(start + 128, source.summaries.count)
         let chunkIDs = Array(source.summaries[start..<end].map(\.id))
         let generation = source.filterGeneration
         source.filterEvalInFlight = true

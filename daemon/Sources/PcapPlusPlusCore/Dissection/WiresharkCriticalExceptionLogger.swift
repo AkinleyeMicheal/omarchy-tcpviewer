@@ -15,6 +15,9 @@ struct WiresharkCriticalExceptionReport: Equatable {
     let exceptionCode: UInt
     let packetIdentifier: UInt64?
     let reason: String
+    // Linux diagnosability addition (documented divergence): raw GLib/Wireshark message
+    // naming the failing dissector/assertion; nil when the exception carried none.
+    let privateMessage: String?
 
     init(
         operation: String,
@@ -22,7 +25,8 @@ struct WiresharkCriticalExceptionReport: Equatable {
         exceptionGroup: UInt,
         exceptionCode: UInt,
         packetIdentifier: UInt64?,
-        reason: String
+        reason: String,
+        privateMessage: String? = nil
     ) {
         self.operation = operation
         self.exceptionName = exceptionName
@@ -30,6 +34,7 @@ struct WiresharkCriticalExceptionReport: Equatable {
         self.exceptionCode = exceptionCode
         self.packetIdentifier = packetIdentifier
         self.reason = reason
+        self.privateMessage = privateMessage
     }
 
     init(_ report: TCPViewerWiresharkExceptionReport) {
@@ -39,7 +44,8 @@ struct WiresharkCriticalExceptionReport: Equatable {
             exceptionGroup: UInt(report.exceptionGroup),
             exceptionCode: UInt(report.exceptionCode),
             packetIdentifier: report.hasPacketIdentifier ? report.packetIdentifier : nil,
-            reason: Self.string(report.reason) ?? "Wireshark raised a critical exception."
+            reason: Self.string(report.reason) ?? "Wireshark raised a critical exception.",
+            privateMessage: Self.string(report.privateMessage)
         )
     }
 
@@ -121,6 +127,9 @@ final class WiresharkCriticalExceptionLogger {
         // Keep this support log narrow and free of packet content or user-identifying paths.
         let timestamp = ISO8601DateFormatter().string(from: dateProvider())
         let packetLine = report.packetIdentifier.map { "Packet Identifier: \($0)" } ?? "Packet Identifier: unavailable"
+        // Linux diagnosability addition (documented divergence): surface the raw GLib
+        // message so the failing dissector/assertion is identifiable in the field.
+        let messageLine = report.privateMessage.map { "Wireshark Message: \($0)" } ?? ""
         return """
         ---
         Timestamp: \(timestamp)
@@ -136,6 +145,7 @@ final class WiresharkCriticalExceptionLogger {
         Exception Code: \(report.exceptionCode)
         \(packetLine)
         Reason: \(report.reason)
+        \(messageLine)
 
         """
     }

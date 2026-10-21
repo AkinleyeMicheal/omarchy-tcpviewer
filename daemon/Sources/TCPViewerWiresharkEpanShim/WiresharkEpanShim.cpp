@@ -173,6 +173,8 @@ struct WiresharkCriticalException {
     std::string operation;
     std::string exceptionName;
     std::string reason;
+    // Linux diagnosability addition (documented divergence): raw GLib exception message.
+    std::string privateMessage;
 };
 
 std::mutex &WiresharkAPIMutex()
@@ -487,6 +489,13 @@ WiresharkCriticalException MakeCriticalException(const char *operation, except_t
     report.operation = operation == nullptr || operation[0] == '\0' ? "running Wireshark" : operation;
     report.exceptionName = WiresharkExceptionName(report.exceptionCode);
     report.reason = CriticalExceptionReason(report.operation);
+    // Linux diagnosability addition (documented divergence): keep the raw GLib message
+    // (names the failing dissector/assertion). Safe here: we are still inside the catch
+    // scope, before except_free/except_pop release the exception payload.
+    if (const char *message = exception == nullptr ? nullptr : except_message(exception);
+        message != nullptr && message[0] != '\0') {
+        report.privateMessage = message;
+    }
     if (packetIdentifier.has_value()) {
         report.packetIdentifier = *packetIdentifier;
         report.hasPacketIdentifier = true;
@@ -536,6 +545,7 @@ TCPViewerWiresharkExceptionReport *CopyExceptionReport(const WiresharkCriticalEx
     copy->operation = CopyCString(report.operation);
     copy->exceptionName = CopyCString(report.exceptionName);
     copy->reason = CopyCString(report.reason, false);
+    copy->privateMessage = CopyCString(report.privateMessage, false);
     return copy;
 }
 
@@ -789,6 +799,12 @@ public:
             info_.columns[index].col_fmt = formats[index];
             info_.columns[index].col_title = nullptr;
             info_.columns[index].col_fence = 0;
+            // col_setup() allocates columns with g_new() (uninitialized) and only
+            // build_column_format_array() assigns hf_id. Wireshark 4.7's
+            // col_dissect() reads hf_id during every tree-building pass, so the
+            // 2-column shortcut must mirror that assignment or the uninitialized
+            // value reaches PROTO_REGISTRAR_GET_NTH as an "Unregistered hf." bug.
+            info_.columns[index].hf_id = proto_registrar_get_id_byname(col_format_abbrev(formats[index]));
         }
         col_finalize(&info_);
         initialized_ = true;
@@ -3303,6 +3319,7 @@ void TCPViewerWiresharkExceptionReportDestroy(TCPViewerWiresharkExceptionReport 
     std::free(const_cast<char *>(report->operation));
     std::free(const_cast<char *>(report->exceptionName));
     std::free(const_cast<char *>(report->reason));
+    std::free(const_cast<char *>(report->privateMessage));
     std::free(report);
 }
 

@@ -137,6 +137,9 @@ typedef struct TCPViewerWiresharkExceptionReport {
     const char *operation;
     const char *exceptionName;
     const char *reason;
+    /* Linux diagnosability addition (documented divergence): the raw GLib/Wireshark
+       exception message naming the failing dissector/assertion; NULL when absent. */
+    const char *privateMessage;
 } TCPViewerWiresharkExceptionReport;
 
 typedef enum TCPViewerDisplayFilterValidationStatus {

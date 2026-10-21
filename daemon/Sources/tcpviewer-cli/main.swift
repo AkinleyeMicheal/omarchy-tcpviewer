@@ -75,7 +75,7 @@ func usage() -> Never {
       stream follow PACKET_ID [--direction both|client-to-server|server-to-client]
                              [--encoding text|hex|base64]
       file import PATH... | file export PATH --format pcap|pcapng SELECTOR [--overwrite]
-      file export-session PATH [--overwrite]
+      file export_session PATH [--overwrite]
 
     options:
       --output json|text   default json (schema_version 1)
