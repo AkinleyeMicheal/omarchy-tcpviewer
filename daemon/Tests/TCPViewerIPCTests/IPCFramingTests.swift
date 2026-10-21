@@ -67,14 +67,14 @@ final class IPCFramingTests: XCTestCase {
 
     func testEventAndResponseAreDistinguishable() throws {
         let event = IPCEventMessage(
-            event: .capturePackets,
-            data: ["source_id": .string("s1"), "packets": .array([.string("1")])]
+            event: .captureState,
+            data: ["source_id": .string("s1"), "phase": .string("running")]
         )
         let eventLine = try IPCCodec.encodeLine(event, limit: IPCLimits.maxResponseBytes)
         guard case .event(let name, let data) = try IPCCodec.decodeServerLine(line: eventLine) else {
             return XCTFail("expected event")
         }
-        XCTAssertEqual(name, "capture.packets")
+        XCTAssertEqual(name, "capture.state")
         XCTAssertEqual(data["source_id"]?.stringValue, "s1")
 
         let response = IPCResponse.success(requestID: "r", command: "app.status", data: [:])

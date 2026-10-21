@@ -2274,6 +2274,10 @@ struct TCPViewerWiresharkSession {
         }
         followInfo->show_stream = BOTH_HOSTS;
         followInfo->substream_id = SUBSTREAM_UNUSED;
+        // Wireshark 4.7+ follow tap handlers drop packets whose stream_id
+        // differs from follow_info->stream_id; 4.6 had no such check and no
+        // field. Must match the stream number from the conv filter above.
+        followInfo->stream_id = followStreamNumber;
         followInfo->filter_out_filter = followFilter;
         followTapContext = g_try_new0(FollowStreamTapContext, 1);
         if (followTapContext == nullptr) {

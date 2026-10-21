@@ -281,7 +281,7 @@ func renderText(command: String, data: [String: IPCValue]) -> String {
             let role = obj["display_name"]?.stringValue ?? ""
             let state = obj["availability"]?.stringValue ?? ""
             let addresses = (obj["addresses"]?.arrayValue ?? [])
-                .compactMap { $0.stringValue }
+                .compactMap { $0.objectValue?["value"]?.stringValue ?? $0.stringValue }
                 .joined(separator: ", ")
             out += "\n" + pad(id, 14) + pad(role, 12) + pad(state, 11) + addresses
         }
@@ -298,7 +298,7 @@ func renderText(command: String, data: [String: IPCValue]) -> String {
                 + pad(formatEndpoint(obj["source"]), 24)
                 + pad(formatEndpoint(obj["destination"]), 24)
                 + pad(obj["protocol"]?.stringValue ?? "", 8)
-                + pad(obj["length"]?.stringValue ?? "", 6)
+                + pad(scalarText(obj["length"]), 6)
                 + (obj["info"]?.stringValue ?? "")
         }
         return out
@@ -309,6 +309,16 @@ func renderText(command: String, data: [String: IPCValue]) -> String {
 
 func pad(_ text: String, _ width: Int) -> String {
     text.count >= width ? text + " " : text + String(repeating: " ", count: width - text.count)
+}
+
+/// Int-or-string column value (daemon sends numbers as .int, not .string).
+func scalarText(_ value: IPCValue?) -> String {
+    switch value {
+    case .string(let text): return text
+    case .int(let number): return String(number)
+    case .double(let number): return String(number)
+    default: return ""
+    }
 }
 
 /// ISO 8601 → local HH:MM:SS.mmm for compact rows.

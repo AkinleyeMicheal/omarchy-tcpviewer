@@ -44,16 +44,23 @@ public enum IPCCommand: String, Codable, CaseIterable {
     case fileImport = "file.import"
     case fileExport = "file.export"
     case fileExportSession = "file.export_session"
+
+    /// Opt this connection into async events (params: enabled bool, default
+    /// true). New in our schema: upstream's file transport had no push.
+    case eventsSubscribe = "events.subscribe"
 }
 
 /// Async server→client notifications, multiplexed on the same socket as
 /// responses. A line is a response iff it carries `ok`; an event iff it
-/// carries `event`.
+/// carries `event`. Only connections that sent `events.subscribe` receive
+/// them. New packet rows are NOT pushed — clients pull with
+/// `packets.list --since-id` (bounded, backpressure-friendly per the
+/// upstream AGENTS.md design rules).
 public enum IPCEvent: String, Codable, CaseIterable {
     /// Capture lifecycle/health changed. data: status snapshot.
     case captureState = "capture.state"
-    /// Batch of new packet summaries. data: source_id, packets[], dropped.
-    case capturePackets = "capture.packets"
-    /// Capture health (drop count, store size). data: status snapshot.
+    /// Capture health (drop counts, store size). data: status snapshot.
     case captureHealth = "capture.health"
+    /// A source was opened or closed (e.g. by another client).
+    case sourcesChanged = "sources.changed"
 }
