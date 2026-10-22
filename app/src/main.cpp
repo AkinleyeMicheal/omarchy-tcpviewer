@@ -5,6 +5,8 @@
 #include <QImage>
 #include <QTimer>
 #include <QFile>
+#include <QDir>
+#include <QFileInfo>
 #include <cstdio>
 
 // Qt's default sinks are unreliable under some tooling, so always write to
@@ -43,21 +45,53 @@ int main(int argc, char *argv[])
         []() { QCoreApplication::exit(1); }, Qt::QueuedConnection);
     engine.loadFromModule("Omarchy.TCPViewer", "Main");
 
-    // Deterministic screenshots for headless GUI verification and CI.
+    // Deterministic screenshots for headless GUI verification and CI. The main
+    // window goes to the exact path; any other open window (e.g. Follow Stream)
+    // is saved next to it with its slugified title appended.
     const QString screenshotPath = qEnvironmentVariable("TCPVIEWER_SCREENSHOT");
     const QString placementOverride = qEnvironmentVariable("TCPVIEWER_INSPECTOR_PLACEMENT");
     if (!screenshotPath.isEmpty()) {
         bool delayOK = false;
         const int delayMs = qEnvironmentVariableIntValue("TCPVIEWER_SCREENSHOT_DELAY_MS", &delayOK);
         QTimer::singleShot(delayOK && delayMs > 0 ? delayMs : 1500, &app, [&engine, screenshotPath, placementOverride]() {
-            if (!engine.rootObjects().isEmpty()) {
-                if (auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst())) {
-                    if (!placementOverride.isEmpty())
-                        window->setProperty("inspectorPlacement", placementOverride);
-                    const QImage image = window->grabWindow();
-                    if (!image.save(screenshotPath))
-                        qWarning("Failed to write screenshot to %s", qPrintable(screenshotPath));
+            QFileInfo info(screenshotPath);
+            const auto titleSlug = [](const QString &title) {
+                QString slug;
+                for (const QChar &character : title)
+                    slug += character.isLetterOrNumber() ? character : QLatin1Char('-');
+                return slug;
+            };
+            const auto windows = QGuiApplication::allWindows();
+            // Two passes: the main window is captured at the exact path, other
+            // windows (Follow Stream, Statistics…) get a suffix.
+            QQuickWindow *mainWindow = nullptr;
+            for (QWindow *base : windows) {
+                auto *window = qobject_cast<QQuickWindow *>(base);
+                if (window && window->isVisible()
+                    && window->property("inspectorPlacement").isValid()) {
+                    mainWindow = window;
+                    break;
                 }
+            }
+            QList<QQuickWindow *> others;
+            for (QWindow *base : windows) {
+                auto *window = qobject_cast<QQuickWindow *>(base);
+                if (window && window->isVisible() && window != mainWindow)
+                    others.append(window);
+            }
+            if (mainWindow) {
+                if (!placementOverride.isEmpty())
+                    mainWindow->setProperty("inspectorPlacement", placementOverride);
+                const QImage image = mainWindow->grabWindow();
+                if (!image.save(screenshotPath))
+                    qWarning("Failed to write screenshot to %s", qPrintable(screenshotPath));
+            }
+            for (QQuickWindow *window : others) {
+                const QString target = info.dir().filePath(
+                    info.completeBaseName() + "-" + titleSlug(window->title()) + ".png");
+                const QImage image = window->grabWindow();
+                if (!image.save(target))
+                    qWarning("Failed to write screenshot to %s", qPrintable(target));
             }
             if (qEnvironmentVariableIsSet("TCPVIEWER_SCREENSHOT_EXIT"))
                 QCoreApplication::quit();

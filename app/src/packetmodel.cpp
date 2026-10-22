@@ -131,6 +131,14 @@ int PacketListModel::rowForPacketID(const QString &packetID) const
     return -1;
 }
 
+const QString &PacketListModel::protocolAt(int row) const
+{
+    static const QString empty;
+    if (row < 0 || row >= m_rows.size())
+        return empty;
+    return m_rows.at(row).protocol;
+}
+
 void PacketListModel::appendRows(const QVector<PacketRow> &rows)
 {
     if (rows.isEmpty())

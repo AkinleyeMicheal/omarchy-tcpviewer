@@ -15,6 +15,7 @@ Item {
 
     signal rowClicked(int index)
     signal rowActivated(int index)
+    signal rowContextClicked(int index, real globalX, real globalY)
 
     readonly property var columns: {
         var result = []
@@ -186,10 +187,20 @@ Item {
 
             MouseArea {
                 anchors.fill: parent
-                acceptedButtons: Qt.LeftButton
-                onClicked: {
-                    root.selectedIndex = cell.row
-                    root.rowClicked(cell.row)
+                // Right-click raises the downstream context menu (Follow Stream, …).
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                onPressed: (mouse) => {
+                    if (mouse.button === Qt.RightButton) {
+                        root.selectedIndex = cell.row
+                        mouse.accepted = true
+                        root.rowContextClicked(cell.row, mouse.globalX, mouse.globalY)
+                    }
+                }
+                onClicked: (mouse) => {
+                    if (mouse.button === Qt.LeftButton) {
+                        root.selectedIndex = cell.row
+                        root.rowClicked(cell.row)
+                    }
                 }
                 onDoubleClicked: root.rowActivated(cell.row)
             }

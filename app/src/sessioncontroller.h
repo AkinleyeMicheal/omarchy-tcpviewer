@@ -78,6 +78,7 @@ public:
     Q_INVOKABLE void pauseCapture();
     Q_INVOKABLE void resumeCapture();
     Q_INVOKABLE void importFiles(const QVariantList &urls);
+    Q_INVOKABLE void reportError(const QString &message);
     Q_INVOKABLE void closeSource(const QString &sourceID);
     Q_INVOKABLE void selectSource(const QString &sourceID);
     Q_INVOKABLE void clearPackets();

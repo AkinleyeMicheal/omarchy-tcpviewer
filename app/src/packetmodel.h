@@ -74,6 +74,7 @@ public:
     Q_INVOKABLE void setColumnCount(int count);
     Q_INVOKABLE QString packetIDAt(int row) const;
     Q_INVOKABLE int rowForPacketID(const QString &packetID) const;
+    Q_INVOKABLE const QString &protocolAt(int row) const;
 
     // Appends a batch in one beginInsertRows/endInsertRows pair, matching the
     // upstream table's coalesced row inserts.

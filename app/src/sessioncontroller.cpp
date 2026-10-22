@@ -575,6 +575,11 @@ void SessionController::setError(const QString &message)
     emit errorTextChanged();
 }
 
+void SessionController::reportError(const QString &message)
+{
+    setError(message);
+}
+
 void SessionController::setLoading(bool loading)
 {
     if (m_loading == loading)

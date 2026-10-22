@@ -417,6 +417,11 @@ ApplicationWindow {
                             return
                         session.selectPacket(session.packets.packetIDAt(index))
                     }
+                    onRowContextClicked: function(index, globalX, globalY) {
+                        if (bench.enabled)
+                            return
+                        rowContextMenu.openFor(index, globalX, globalY)
+                    }
                 }
 
                 PacketTableListView {
@@ -502,6 +507,47 @@ ApplicationWindow {
         fileMode: FileDialog.OpenFiles
         nameFilters: ["Capture files (*.pcap *.pcapng)", "All files (*)"]
         onAccepted: session.importFiles(selectedFiles)
+    }
+
+    // Follow Stream -------------------------------------------------------------
+    FollowSessionController {
+        id: follow
+    }
+
+    FollowStreamWindow {
+        id: followWindow
+        visible: false
+        follow: follow
+        session: session
+    }
+
+    Connections {
+        target: follow
+        // Open or raise the workspace after the response lands, matching
+        // upstream FollowStreamWindowController.present().
+        function onFollowReady() {
+            followWindow.openAndRaise()
+        }
+    }
+
+    // Row context menu (upstream Tools ▸ "Follow TCP Stream" menu item keeps the
+    // title per protocol; here it lives on the table's right-click menu).
+    Menu {
+        id: rowContextMenu
+        property int pendingRow: -1
+        property string pendingProtocol: ""
+
+        function openFor(index, globalX, globalY) {
+            pendingRow = index
+            pendingProtocol = String(session.packets.protocolAt(index)).toUpperCase()
+            popup(globalX, globalY)
+        }
+
+        MenuItem {
+            text: rowContextMenu.pendingProtocol.indexOf("TCP") >= 0
+                ? "Follow TCP Stream" : "Follow UDP Stream"
+            onTriggered: follow.follow(String(session.packets.packetIDAt(rowContextMenu.pendingRow)))
+        }
     }
 
     Shortcut {
