@@ -66,3 +66,56 @@ matching sizes, SF Symbols → redrawn SVGs, macOS vibrancy → Qt blur.
 Default appearance is the exact upstream look. An optional
 "Follow Omarchy theme" setting remaps only the color tokens onto the active
 Omarchy/Catppuccin palette; layout and interactions are identical either way.
+
+## ADR-7: System Wireshark (>= 4.7) instead of the vendored 4.6.6 checkout
+
+Status: Accepted (2026-10-22)
+
+Upstream vendors and patches Wireshark 4.6.6 (pinned commit
+`3a22c3e`, built via `scripts/bootstrap-wireshark.sh`). Omarchy TCPViewer
+builds the daemon against the SYSTEM Wireshark development files instead
+(Arch: `wireshark-cli`, currently 4.7.3; headers under
+`/usr/include/wireshark`). Rationale: security updates arrive through
+pacman, no second copy of libwireshark is shipped or ABI-mixed (mixing the
+vendored 4.6 headers with system 4.x libs segfaulted in spike #1), and the
+GPL-2.0-or-later obligations stay simple. The only vendored GPL file left
+is `vendor/ipaddr/ipaddr.c` (dfilter `ipaddr` plugin, patched to
+`<epan/iana-info.h>`).
+
+Consequences — behaviors 4.7 changed that the shim must reproduce
+(each fix carries an explanatory comment in the shim):
+
+- `col_dissect()` (new in 4.7) reads `col_item_t.hf_id`, which only
+  `build_column_format_array()` initializes. The shim's two-column fast
+  path must set `hf_id` from `proto_registrar_get_id_byname()` before use;
+  otherwise recycled heap values reach `PROTO_REGISTRAR_GET_NTH`
+  ("Unregistered hf." DissectorError, permanent Swift-fallback
+  degradation).
+- `dfvm_apply_full()` asserts a non-null `proto_tree`. Tap listeners carry
+  their own compiled filter (`tl->code`, from `register_tap_listener`'s
+  fstring) which 4.7 applies during tap delivery. While the stream-follow
+  tap is registered, both the follow re-dissection and the shared
+  first-pass dissector must build a tree; the first pass returns to the
+  upstream tree-less fast path when follow ends.
+- The follow tap handler now drops packets whose `stream_id` differs from
+  `follow_info->stream_id`; the shim sets that field (one-line divergence
+  from upstream, documented in the shim).
+- Linux diagnosability addition: critical-exception reports carry the raw
+  GLib message (`except_message`) and log it as `Wireshark Message:`.
+  Upstream keeps it out of on-disk logs; the corresponding test
+  expectation is flipped with a comment.
+
+Port behavior notes:
+
+- The native core's ObjC-style `error:` out-parameters are reproduced with
+  `NSError?`. `TCPViewerCoreError.nativeBridgeNSError` round-trips code and
+  message through `com.proxyman.tcpviewer.NativeBridge` so
+  `NativeBridgeMapper.coreError` does not degrade every failure to the
+  call site's default.
+- `PcapPlusPlusCoreModule` metadata names the system dependency
+  (`wiresharkPinnedTag == "system"`); `WiresharkDependencyPinTests` enforces
+  the >= 4.7 floor via pkg-config.
+- Regression gate: the upstream `PcapPlusPlusCoreTests` suite is ported
+  into `daemon/Tests/PcapPlusPlusCoreTests` and must run with
+  `swift test --no-parallel` (the epan session is process-global; parallel
+  suites contend it). 154 core tests + 12 IPC tests pass.
