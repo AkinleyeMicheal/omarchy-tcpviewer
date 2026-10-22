@@ -2144,6 +2144,30 @@ struct TCPViewerWiresharkSession {
         return true;
     }
 
+    // Rebuilds the shared first-pass dissector. The follow tap's stream filter
+    // (register_tap_listener's fstring, kept in tl->code) is applied by Wireshark
+    // 4.7 inside tap delivery, which asserts a non-null proto_tree
+    // (dfvm_apply_full), so the tree-less first pass is only legal while no
+    // coded tap listener is registered.
+    std::optional<WiresharkCriticalException> RecreateFirstPassDissectLocked(bool requiresTree)
+    {
+        if (firstPassDissect == nullptr || epan == nullptr) {
+            return std::nullopt;
+        }
+        if (auto report = FreeEpanDissect(firstPassDissect, "freeing Wireshark first-pass dissector", std::nullopt)) {
+            return report;
+        }
+        epan_dissect_t *created = nullptr;
+        auto *currentEpan = epan;
+        if (auto report = CatchWiresharkException("recreating Wireshark first-pass dissector", std::nullopt, [&created, currentEpan, requiresTree] {
+                created = epan_dissect_new(currentEpan, requiresTree, false);
+            })) {
+            return report;
+        }
+        firstPassDissect = created;
+        return std::nullopt;
+    }
+
     void cancelFollowLocked()
     {
         if (followTapRegistered && followTapContext != nullptr) {
@@ -2174,6 +2198,11 @@ struct TCPViewerWiresharkSession {
         followRecordCount = 0;
         followEndpointsInitialized = false;
         followNewestPayloadItem = nullptr;
+        // Restore the tree-less upstream first-pass fast path now that no
+        // coded tap listener remains registered.
+        if (auto report = RecreateFirstPassDissectLocked(false)) {
+            recordCriticalExceptionLocked(std::move(*report), false);
+        }
     }
 
     bool beginFollowLocked(
@@ -2329,6 +2358,12 @@ struct TCPViewerWiresharkSession {
         }
 
         followTapRegistered = true;
+        // The registered follow tap now carries tl->code, so every dissection
+        // pushed through taps (including observes concurrent with this follow)
+        // needs a proto_tree; rebuild the shared first pass accordingly.
+        if (auto report = RecreateFirstPassDissectLocked(true)) {
+            return failWithCriticalExceptionLocked(std::move(*report));
+        }
         activeFollowSession() = this;
         followReference = nullptr;
         followPreviousFrame = nullptr;
@@ -2372,7 +2407,10 @@ struct TCPViewerWiresharkSession {
         epan_dissect_t *dissect = nullptr;
         auto *currentEpan = epan;
         if (auto report = CatchWiresharkException("creating Wireshark stream follow dissector", context.packetIdentifier, [&] {
-                dissect = epan_dissect_new(currentEpan, tap_listeners_require_dissection(), false);
+                // Always build a tree: tap delivery applies this follow tap's own
+                // stream filter (tl->code) and Wireshark 4.7 asserts a non-null
+                // proto_tree (dfvm_apply_full).
+                dissect = epan_dissect_new(currentEpan, true, false);
             })) {
             failWithCriticalExceptionLocked(std::move(*report));
             return TCPViewerWiresharkFollowPacketFailed;
