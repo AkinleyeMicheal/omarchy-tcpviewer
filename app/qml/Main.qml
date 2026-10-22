@@ -1,69 +1,199 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import Omarchy.TCPViewer
 
 ApplicationWindow {
     id: window
+
     width: 1440
     height: 900
+    minimumWidth: 900
+    minimumHeight: 560
     visible: true
     title: qsTr("Omarchy TCPViewer")
     color: Theme.windowBackground
 
-    property bool capturing: false
+    property bool sidebarVisible: true
 
-    PacketListModel { id: packets }
+    SessionController {
+        id: session
+        Component.onCompleted: start()
+    }
+
     Benchmark { id: bench }
 
-    // Toolbar ----------------------------------------------------------------
+    readonly property var interfaceItems: {
+        var items = []
+        for (var i = 0; i < session.interfaces.length; ++i) {
+            var iface = session.interfaces[i]
+            var label = iface.friendly_name ? iface.friendly_name + " (" + iface.id + ")" : iface.id
+            items.push({ id: String(iface.id), label: label })
+        }
+        return items
+    }
+
+    function statusText() {
+        if (!session.connected)
+            return "Connecting to tcpviewerd…"
+        if (session.capturing)
+            return "Capturing on " + String(session.status.interface || session.selectedInterface || "interface")
+        if (session.currentSourceID !== "")
+            return session.loading ? "Loading capture…" : "Capture ready"
+        return "Ready"
+    }
+
+    // Toolbar -----------------------------------------------------------------
     Rectangle {
         id: toolbar
+        anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.top: parent.top
         height: 48
         color: Theme.contentBackground
 
-        RowLayout {
-            anchors.fill: parent
+        Row {
+            anchors.left: parent.left
             anchors.leftMargin: 12
-            anchors.rightMargin: 12
-            spacing: 10
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 8
 
-            // Interface popup (visual stand-in until the daemon is wired in).
-            Rectangle {
-                Layout.preferredWidth: 220
-                Layout.preferredHeight: 28
-                radius: 6
-                color: Theme.windowBackground
+            ToolbarButton {
+                glyph: "☰"
+                width: 28
+                tooltip: "Toggle Sidebar"
+                onClicked: window.sidebarVisible = !window.sidebarVisible
+            }
 
-                Row {
-                    anchors.fill: parent
-                    anchors.leftMargin: 10
-                    anchors.rightMargin: 8
-                    spacing: 6
+            ComboBox {
+                id: interfaceCombo
+                width: 230
+                height: 28
+                model: window.interfaceItems
+                textRole: "label"
+                enabled: session.interfaces.length > 0 && !session.capturing
+                font.family: Theme.uiFont
+                font.pixelSize: Theme.uiSize
+
+                function syncSelection() {
+                    for (var i = 0; i < model.length; ++i) {
+                        if (model[i].id === session.selectedInterface) {
+                            currentIndex = i
+                            return
+                        }
+                    }
+                    currentIndex = model.length > 0 ? 0 : -1
+                }
+
+                Component.onCompleted: syncSelection()
+                onActivated: {
+                    if (index >= 0 && index < model.length)
+                        session.selectedInterface = model[index].id
+                }
+                onModelChanged: syncSelection()
+
+                Connections {
+                    target: session
+                    function onSelectedInterfaceChanged() { interfaceCombo.syncSelection() }
+                    function onInterfacesChanged() { interfaceCombo.syncSelection() }
+                }
+
+                background: Rectangle {
+                    radius: 6
+                    color: Theme.windowBackground
+                    border.width: 1
+                    border.color: interfaceCombo.activeFocus ? Theme.accent : Theme.separator
+                }
+
+                contentItem: Text {
+                    leftPadding: 10
+                    rightPadding: 24
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                    text: interfaceCombo.displayText
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.uiSize
+                    color: Theme.label
+                }
+
+                indicator: Text {
+                    x: interfaceCombo.width - 18
+                    y: (interfaceCombo.height - implicitHeight) / 2
+                    text: "⌄"
+                    font.pixelSize: 11
+                    color: Theme.secondaryLabel
+                }
+
+                delegate: Item {
+                    required property var modelData
+                    required property int index
+                    width: interfaceCombo.width
+                    height: 26
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 4
+                        color: index === interfaceCombo.highlightedIndex
+                            ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.16)
+                            : (interfaceMouse.containsMouse
+                                ? Qt.rgba(Theme.label.r, Theme.label.g, Theme.label.b, 0.06)
+                                : "transparent")
+                    }
 
                     Text {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 8
+                        anchors.right: parent.right
+                        anchors.rightMargin: 8
                         anchors.verticalCenter: parent.verticalCenter
-                        text: "Ethernet (enp0s25)"
+                        text: modelData.label
+                        elide: Text.ElideRight
                         font.family: Theme.uiFont
                         font.pixelSize: Theme.uiSize
                         color: Theme.label
                     }
+
+                    MouseArea {
+                        id: interfaceMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                    }
+                }
+
+                popup: Popup {
+                    y: interfaceCombo.height + 4
+                    width: interfaceCombo.width
+                    padding: 4
+
+                    background: Rectangle {
+                        radius: 8
+                        color: Theme.contentBackground
+                        border.width: 1
+                        border.color: Theme.separator
+                    }
+
+                    contentItem: ListView {
+                        implicitHeight: contentHeight
+                        model: interfaceCombo.popup.visible ? interfaceCombo.delegateModel : null
+                        currentIndex: interfaceCombo.highlightedIndex
+                        clip: true
+                    }
                 }
             }
 
-            // Capture toggle
             Rectangle {
-                Layout.preferredWidth: 74
-                Layout.preferredHeight: 28
+                id: captureButton
+                width: 76
+                height: 28
                 radius: 6
-                color: window.capturing ? Theme.systemRed : Theme.accent
+                color: !session.connected
+                    ? Theme.separator
+                    : (session.capturing ? Theme.systemRed : Theme.accent)
 
                 Text {
                     anchors.centerIn: parent
-                    text: window.capturing ? "Stop" : "Start"
+                    text: session.capturing ? "Stop" : "Start"
                     font.family: Theme.uiFont
                     font.pixelSize: Theme.uiSize
                     font.weight: Font.DemiBold
@@ -72,26 +202,62 @@ ApplicationWindow {
 
                 MouseArea {
                     anchors.fill: parent
-                    onClicked: window.capturing = !window.capturing
+                    enabled: session.connected
+                    onClicked: {
+                        if (session.capturing)
+                            session.stopCapture()
+                        else
+                            session.startCapture(session.selectedInterface)
+                    }
                 }
             }
 
-            Item { Layout.fillWidth: true }
+            ToolbarButton {
+                visible: session.capturing
+                glyph: session.capturePhase === "paused" ? "▶" : "❚❚"
+                width: 28
+                tooltip: session.capturePhase === "paused" ? "Resume Capture" : "Pause Capture"
+                onClicked: {
+                    if (session.capturePhase === "paused")
+                        session.resumeCapture()
+                    else
+                        session.pauseCapture()
+                }
+            }
+
+            ToolbarButton {
+                text: "Open…"
+                tooltip: "Open Capture"
+                onClicked: openDialog.open()
+            }
+        }
+
+        Row {
+            anchors.centerIn: parent
+            spacing: 6
+
+            Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: 7
+                height: 7
+                radius: 3.5
+                color: session.connected ? Theme.systemGreen : Theme.systemRed
+            }
 
             Text {
-                text: packets.count === 1 ? "1 packet" : packets.count + " packets"
+                anchors.verticalCenter: parent.verticalCenter
+                text: window.statusText()
                 font.family: Theme.uiFont
                 font.pixelSize: Theme.uiSmall
                 color: Theme.secondaryLabel
             }
 
-            Item { Layout.fillWidth: true }
-
-            Text {
-                text: "Share"
-                font.family: Theme.uiFont
-                font.pixelSize: Theme.uiSize
-                color: Theme.label
+            BusyIndicator {
+                anchors.verticalCenter: parent.verticalCenter
+                width: 16
+                height: 16
+                running: session.loading
+                visible: running
             }
         }
 
@@ -104,120 +270,207 @@ ApplicationWindow {
         }
     }
 
-    // Quick filters ----------------------------------------------------------
-    Rectangle {
-        id: quickFilter
+    // Main split --------------------------------------------------------------
+    SplitView {
         anchors.top: toolbar.bottom
         anchors.left: parent.left
         anchors.right: parent.right
-        height: Theme.quickFilterHeight
-        color: Theme.contentBackground
+        anchors.bottom: parent.bottom
+        orientation: Qt.Horizontal
 
-        Row {
-            anchors.left: parent.left
-            anchors.leftMargin: 16
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 8
+        handle: Rectangle {
+            implicitWidth: 1
+            implicitHeight: 1
+            color: Theme.separator
+        }
 
-            Repeater {
-                model: ["All", "TCP", "UDP", "TLS", "DNS", "HTTP"]
+        Sidebar {
+            id: sidebar
+            session: session
+            visible: window.sidebarVisible
+            SplitView.preferredWidth: Theme.sidebarDefaultWidth
+            SplitView.minimumWidth: Theme.sidebarMinimumWidth
+            SplitView.maximumWidth: 480
+        }
 
-                delegate: Rectangle {
-                    required property int index
-                    required property string modelData
+        Rectangle {
+            id: workspace
+            color: Theme.contentBackground
+            SplitView.fillWidth: true
+            SplitView.minimumWidth: 480
 
-                    width: pill.implicitWidth + 32
-                    height: Theme.quickFilterButtonHeight
-                    radius: 6
-                    color: index === 0 ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.18)
-                                       : "transparent"
+            QuickFilterBar {
+                id: quickFilter
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: Theme.quickFilterHeight
+                session: session
+            }
 
-                    Text {
-                        id: pill
-                        anchors.centerIn: parent
-                        text: modelData
-                        font.family: Theme.uiFont
-                        font.pixelSize: Theme.uiSmall
-                        font.weight: Font.Medium
-                        color: index === 0 ? Theme.accent : Theme.label
+            Rectangle {
+                id: errorBanner
+                anchors.top: quickFilter.bottom
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: session.errorText !== "" ? 28 : 0
+                visible: height > 0
+                color: Theme.dark ? "#3a2323" : "#fdecec"
+
+                Text {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 12
+                    anchors.right: dismissError.left
+                    anchors.rightMargin: 8
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: session.errorText
+                    elide: Text.ElideRight
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.uiSmall
+                    color: Theme.systemRed
+                }
+
+                Text {
+                    id: dismissError
+                    anchors.right: parent.right
+                    anchors.rightMargin: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "×"
+                    font.pixelSize: 12
+                    color: Theme.secondaryLabel
+
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: session.clearError()
                     }
                 }
             }
-        }
 
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 1
-            color: Theme.separator
+            StatusStrip {
+                id: statusStrip
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: Theme.statusStripHeight
+                session: session
+            }
+
+            Item {
+                id: viewport
+                anchors.top: errorBanner.visible ? errorBanner.bottom : quickFilter.bottom
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: statusStrip.top
+
+                PacketTableView {
+                    id: productionTable
+                    anchors.fill: parent
+                    model: session.packets
+                    follow: true
+                    visible: bench.enabled ? bench.view === "table" : (session.packets.count > 0)
+                }
+
+                PacketTableListView {
+                    id: listTable
+                    anchors.fill: parent
+                    model: session.packets
+                    follow: bench.follow
+                    visible: bench.enabled && bench.view === "list"
+                }
+
+                Column {
+                    anchors.centerIn: parent
+                    spacing: 8
+                    visible: !bench.enabled && session.loading && session.packets.count === 0
+
+                    BusyIndicator {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: 24
+                        height: 24
+                        running: visible
+                    }
+
+                    Text {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: "Loading…"
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.uiSize
+                        color: Theme.secondaryLabel
+                    }
+                }
+
+                EmptyState {
+                    anchors.fill: parent
+                    visible: !bench.enabled && session.packets.count === 0
+                             && !session.loading && session.currentSourceID === ""
+                    onStartCaptureRequested: session.startCapture(session.selectedInterface)
+                    onOpenFileRequested: openDialog.open()
+                }
+
+                EmptyState {
+                    anchors.fill: parent
+                    visible: !bench.enabled && session.packets.count === 0
+                             && !session.loading && session.currentSourceID !== ""
+                    glyph: "⌁"
+                    title: "No Packets"
+                    message: "This capture contains no packets, or the current filter hides them all."
+                    showStartAction: false
+                    showOpenAction: false
+                }
+            }
         }
     }
 
-    // Packet table -----------------------------------------------------------
-    Loader {
-        id: tableLoader
-        anchors.top: quickFilter.bottom
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: statusStrip.top
-        sourceComponent: bench.enabled && bench.view === "table" ? qmlTableView : qmlListView
+    FileDialog {
+        id: openDialog
+        title: "Open Capture"
+        fileMode: FileDialog.OpenFiles
+        nameFilters: ["Capture files (*.pcap *.pcapng)", "All files (*)"]
+        onAccepted: session.importFiles(selectedFiles)
     }
 
-    Component {
-        id: qmlListView
-        PacketTableListView {
-            model: packets
-            follow: bench.follow
-        }
-    }
-
-    Component {
-        id: qmlTableView
-        PacketTableView {
-            model: packets
-            follow: bench.follow
-        }
-    }
-
-    // Status strip -----------------------------------------------------------
-    Rectangle {
-        id: statusStrip
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        height: Theme.statusStripHeight
-        color: Theme.windowBackground
-
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            height: 1
-            color: Theme.separator
-        }
-
-        Text {
-            anchors.centerIn: parent
-            text: packets.count === 1 ? "1 packet" : packets.count + " packets"
-            font.family: Theme.monoFont
-            font.pixelSize: Theme.uiSmall
-            color: Theme.secondaryLabel
-        }
-
-        Text {
-            anchors.right: parent.right
-            anchors.rightMargin: 14
-            anchors.verticalCenter: parent.verticalCenter
-            text: bench.enabled ? "spike: " + bench.view : ""
-            font.family: Theme.monoFont
-            font.pixelSize: Theme.uiSmall
-            color: Theme.secondaryLabel
-        }
+    Shortcut {
+        sequences: ["Ctrl+O"]
+        onActivated: openDialog.open()
     }
 
     Component.onCompleted: {
         if (bench.enabled)
-            bench.start(packets, window)
+            bench.start(session.packets, window)
+    }
+
+    component ToolbarButton: Rectangle {
+        id: button
+
+        property string text
+        property string glyph
+        property string tooltip
+        signal clicked
+
+        width: button.text !== "" ? buttonLabel.implicitWidth + 20 : 28
+        height: 28
+        radius: 6
+        color: mouse.containsMouse
+            ? Qt.rgba(Theme.label.r, Theme.label.g, Theme.label.b, 0.08)
+            : "transparent"
+
+        Text {
+            id: buttonLabel
+            anchors.centerIn: parent
+            text: button.glyph !== "" ? button.glyph : button.text
+            font.family: Theme.uiFont
+            font.pixelSize: button.glyph !== "" ? 13 : Theme.uiSize
+            color: Theme.label
+        }
+
+        MouseArea {
+            id: mouse
+            anchors.fill: parent
+            hoverEnabled: true
+            onClicked: button.clicked()
+        }
+
+        ToolTip.visible: mouse.containsMouse && button.tooltip !== ""
+        ToolTip.text: button.tooltip
     }
 }

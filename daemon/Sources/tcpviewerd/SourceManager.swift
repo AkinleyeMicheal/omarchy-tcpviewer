@@ -431,6 +431,31 @@ final class SourceManager: @unchecked Sendable {
         }
     }
 
+    /// Release every capture session before process exit.
+    ///
+    /// Wireshark's global wmem teardown asserts when an epan session is still
+    /// registered (`!wmem_in_scope(file_scope)`), so shutdown must stop live
+    /// captures and drop offline documents so their deinits free epan handles.
+    func shutdown(timeout: TimeInterval = 2.0) {
+        let stopped = DispatchGroup()
+        queue.sync {
+            for source in self.sources {
+                source.offlineDocument?.cancelLoading(completion: nil)
+                if let live = source.liveSession {
+                    stopped.enter()
+                    live.stop { _ in stopped.leave() }
+                }
+            }
+            self.sources.removeAll()
+        }
+        if stopped.wait(timeout: .now() + timeout) == .timedOut {
+            FileHandle.standardError.write(Data("tcpviewerd: live capture stop timed out\n".utf8))
+        }
+        // Give ARC a moment to deallocate documents and free their epan handles
+        // while no other thread is dissecting.
+        Thread.sleep(forTimeInterval: 0.2)
+    }
+
     private func stopAndRemove(
         source: Source,
         emitChange: Bool,

@@ -85,22 +85,21 @@ fflush(stdout)
 // MARK: - Signals
 
 // SIGPIPE must never kill the daemon: a vanished client is just an EPIPE
-// write (empty handler keeps write() returning errors instead of signals).
-signal(SIGPIPE, { _ in })
+// write. Handlers only raise a flag; teardown runs on the normal run loop so
+// Wireshark sessions can be released before exit.
+signal(SIGPIPE, SIG_IGN)
 
-var shuttingDown = false
-func shutdown() {
-    guard !shuttingDown else { return }
-    shuttingDown = true
-    server.stop()
-    print("tcpviewerd stopped")
-    exit(0)
-}
-
-signal(SIGINT, { _ in shutdown() })
-signal(SIGTERM, { _ in shutdown() })
+nonisolated(unsafe) var shutdownRequested: sig_atomic_t = 0
+signal(SIGINT, { _ in shutdownRequested = 1 })
+signal(SIGTERM, { _ in shutdownRequested = 1 })
 
 // Foreground run loop (systemd-friendly); poll the flag cheaply.
-while !shuttingDown {
+while shutdownRequested == 0 {
     usleep(250_000)
 }
+
+server.stop()
+manager.shutdown()
+print("tcpviewerd stopped")
+fflush(stdout)
+exit(0)

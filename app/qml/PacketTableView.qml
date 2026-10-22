@@ -2,15 +2,19 @@ import QtQuick
 import QtQuick.Controls
 import Omarchy.TCPViewer
 
-// Spike #2 variant B (chosen): Qt Quick Controls TableView with cell delegates.
-// Same data stream and column layout as the rejected ListView variant; see
-// app/design/spike-2.md for measurements. This is the base of the production
-// packet table.
+// Production packet table (Spike #2 decision): Qt Quick Controls TableView with
+// per-cell delegates, virtualized and reused. Reproduces the upstream row
+// metrics, alternating backgrounds, secondary text colors, and protocol pills
+// (PacketTablePresentation.swift / PacketTableCells.swift).
 Item {
     id: root
 
     required property PacketListModel model
     property bool follow: true
+    property int selectedIndex: -1
+
+    signal rowClicked(int index)
+    signal rowActivated(int index)
 
     readonly property var columns: {
         var result = []
@@ -41,6 +45,7 @@ Item {
     function readRole(item, role) {
         switch (role) {
         case "number": return String(item.number)
+        case "packetId": return item.packetId
         case "time": return item.time
         case "source": return item.source
         case "sourcePort": return item.sourcePort
@@ -52,9 +57,18 @@ Item {
         case "streamId": return item.streamId
         case "length": return String(item.length)
         case "summary": return item.summary
+        case "tcpFlags": return item.tcpFlags
+        case "direction": return item.direction
+        case "interface": return item.interface
+        case "decodeStatus": return item.decodeStatus
+        case "sourceKind": return item.sourceKind
+        case "tcpPayloadLength": return String(item.tcpPayloadLength)
         default: return ""
         }
     }
+
+    Component.onCompleted: root.model.setColumnCount(root.columns.length)
+    onColumnsChanged: root.model.setColumnCount(root.columns.length)
 
     Rectangle {
         id: header
@@ -84,6 +98,14 @@ Item {
                     font.pixelSize: Theme.uiSmall
                     font.weight: Font.DemiBold
                 }
+
+                Rectangle {
+                    anchors.right: parent.right
+                    width: 1
+                    height: parent.height - 8
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: Theme.separator
+                }
             }
         }
 
@@ -111,23 +133,65 @@ Item {
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
         delegate: Rectangle {
+            id: cell
+
             required property int row
             required property int column
             required property var model
 
+            readonly property var columnData: root.columns[column]
+            readonly property bool isProtocol: columnData.role === "protocol"
+            readonly property string cellText: root.readRole(model, columnData.role)
+            readonly property bool isSecondary: Theme.isSecondary(columnData.role)
+            readonly property bool isSummary: columnData.role === "summary"
+
             implicitHeight: Theme.packetRowHeight
-            color: row % 2 === 1 ? Theme.rowAlternate : "transparent"
+            color: row === root.selectedIndex
+                ? Qt.rgba(Theme.selection.r, Theme.selection.g, Theme.selection.b, 0.18)
+                : (row % 2 === 1 ? Theme.rowAlternate : "transparent")
+
+            Rectangle {
+                visible: cell.isProtocol
+                anchors.centerIn: parent
+                width: Math.min(Math.max(pillLabel.implicitWidth + 16, 42), cell.width - 12)
+                height: Math.min(cell.height - 4, Math.max(18, pillLabel.implicitHeight + 6))
+                radius: height / 2
+                color: Theme.protocolFill(model.protocol)
+
+                Text {
+                    id: pillLabel
+                    anchors.centerIn: parent
+                    text: cell.cellText
+                    color: Theme.protocolTint(model.protocol)
+                    font.family: Theme.monoFont
+                    font.pixelSize: Theme.packetFontSize
+                    font.weight: Font.DemiBold
+                }
+            }
 
             Text {
+                visible: !cell.isProtocol
                 anchors.fill: parent
                 anchors.leftMargin: 5
                 anchors.rightMargin: 4
                 verticalAlignment: Text.AlignVCenter
                 elide: Text.ElideRight
-                text: root.readRole(model, root.columns[column].role)
-                color: Theme.isSecondary(root.columns[column].role) ? Theme.secondaryLabel : Theme.label
+                text: cell.cellText
+                color: cell.isSummary && model.severity !== 0
+                    ? Theme.systemOrange
+                    : (cell.isSecondary ? Theme.secondaryLabel : Theme.label)
                 font.family: Theme.monoFont
                 font.pixelSize: Theme.packetFontSize
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.LeftButton
+                onClicked: {
+                    root.selectedIndex = cell.row
+                    root.rowClicked(cell.row)
+                }
+                onDoubleClicked: root.rowActivated(cell.row)
             }
         }
 
