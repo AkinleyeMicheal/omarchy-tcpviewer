@@ -26,6 +26,7 @@ struct PacketRow {
     QString decodeStatus;
     QString sourceKind;
     int length = 0;
+    int originalLength = 0; // on-wire size; statistics use it, fallback mimics length
     int tcpPayloadLength = 0;
     int severity = 0; // 0 normal, 1 warning (orange summary)
 };
@@ -74,6 +75,8 @@ public:
     Q_INVOKABLE void setColumnCount(int count);
     Q_INVOKABLE QString packetIDAt(int row) const;
     Q_INVOKABLE int rowForPacketID(const QString &packetID) const;
+    // Flat snapshot for derived models (endpoint statistics).
+    Q_INVOKABLE QVariantList snapshotRows() const;
     Q_INVOKABLE const QString &protocolAt(int row) const;
 
     // Appends a batch in one beginInsertRows/endInsertRows pair, matching the

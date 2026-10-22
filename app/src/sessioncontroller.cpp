@@ -658,6 +658,7 @@ PacketRow SessionController::parseSummary(const QVariantMap &summary)
     row.decodeStatus = summary.value(QStringLiteral("decode_status")).toString();
     row.sourceKind = summary.value(QStringLiteral("source_kind")).toString();
     row.length = summary.value(QStringLiteral("length")).toInt();
+    row.originalLength = summary.value(QStringLiteral("original_length")).toInt();
     row.tcpPayloadLength = summary.value(QStringLiteral("tcp_payload_length")).toInt();
     return row;
 }

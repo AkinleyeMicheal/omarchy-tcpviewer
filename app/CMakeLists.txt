@@ -16,6 +16,7 @@ qt_add_executable(omarchy-tcpviewer
     src/packetdetailmodel.cpp
     src/hexview.cpp
     src/followstreammodel.cpp
+    src/endpointstatsmodel.cpp
     src/benchmark.cpp
     src/daemonclient.cpp
     src/sessioncontroller.cpp
@@ -34,6 +35,7 @@ set_source_files_properties(qml/StatusStrip.qml PROPERTIES QT_RESOURCE_ALIAS Sta
 set_source_files_properties(qml/EmptyState.qml PROPERTIES QT_RESOURCE_ALIAS EmptyState.qml)
 set_source_files_properties(qml/Inspector.qml PROPERTIES QT_RESOURCE_ALIAS Inspector.qml)
 set_source_files_properties(qml/FollowStreamWindow.qml PROPERTIES QT_RESOURCE_ALIAS FollowStreamWindow.qml)
+set_source_files_properties(qml/EndpointStatisticsWindow.qml PROPERTIES QT_RESOURCE_ALIAS EndpointStatisticsWindow.qml)
 set_source_files_properties(qml/Theme.qml PROPERTIES
     QT_RESOURCE_ALIAS Theme.qml
     QT_QML_SINGLETON_TYPE TRUE
@@ -53,11 +55,13 @@ qt_add_qml_module(omarchy-tcpviewer
         qml/EmptyState.qml
         qml/Inspector.qml
         qml/FollowStreamWindow.qml
+        qml/EndpointStatisticsWindow.qml
     SOURCES
         src/packetmodel.h
         src/packetdetailmodel.h
         src/hexview.h
         src/followstreammodel.h
+        src/endpointstatsmodel.h
         src/benchmark.h
         src/daemonclient.h
         src/sessioncontroller.h

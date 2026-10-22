@@ -241,6 +241,13 @@ ApplicationWindow {
             spacing: 6
 
             ToolbarButton {
+                glyph: "Σ"
+                width: 28
+                tooltip: "Endpoint Statistics"
+                onClicked: statsWindow.openAndRaise()
+            }
+
+            ToolbarButton {
                 glyph: "▤"
                 width: 28
                 tooltip: window.inspectorVisible ? "Hide Inspector" : "Show Inspector"
@@ -555,9 +562,36 @@ ApplicationWindow {
         onActivated: openDialog.open()
     }
 
+    // Endpoint statistics (toolbar Σ / Ctrl+Shift+S), upstream Tools item.
+    EndpointStatisticsModel {
+        id: endpointStats
+    }
+
+    EndpointStatisticsWindow {
+        id: statsWindow
+        visible: false
+        stats: endpointStats
+        session: session
+    }
+
+    Shortcut {
+        sequences: ["Ctrl+Shift+S"]
+        onActivated: statsWindow.openAndRaise()
+    }
+
     Component.onCompleted: {
+        // CI/screenshot hook: show the workspace-level statistics window.
+        if (session.startupStatistics)
+            statsTimer.start()
         if (bench.enabled)
             bench.start(session.packets, window)
+    }
+
+    Timer {
+        id: statsTimer
+        interval: 1500
+        repeat: false
+        onTriggered: statsWindow.openAndRaise()
     }
 
     component ToolbarButton: Rectangle {

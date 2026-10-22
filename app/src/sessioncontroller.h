@@ -54,6 +54,7 @@ public:
     bool detailLoading() const { return m_detailLoading; }
     QString detailError() const { return m_detailError; }
     int autoSelectDetailRow() const { return m_autoSelectDetailRow; }
+    bool startupStatistics() const { return qEnvironmentVariableIsSet("TCPVIEWER_OPEN_STATS"); }
     QString autoDetailFilter() const { return m_autoDetailFilter; }
     QVariantList interfaces() const { return m_interfaces; }
     QVariantList sources() const { return m_sources; }
@@ -79,6 +80,8 @@ public:
     Q_INVOKABLE void resumeCapture();
     Q_INVOKABLE void importFiles(const QVariantList &urls);
     Q_INVOKABLE void reportError(const QString &message);
+    // Test hook: TCPVIEWER_OPEN_STATS opens the statistics window at launch.
+    Q_PROPERTY(bool startupStatistics READ startupStatistics CONSTANT)
     Q_INVOKABLE void closeSource(const QString &sourceID);
     Q_INVOKABLE void selectSource(const QString &sourceID);
     Q_INVOKABLE void clearPackets();

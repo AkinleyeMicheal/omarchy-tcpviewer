@@ -1,5 +1,7 @@
 #include "packetmodel.h"
 
+#include <QVariantMap>
+
 PacketListModel::PacketListModel(QObject *parent)
     : QAbstractTableModel(parent)
 {
@@ -129,6 +131,30 @@ int PacketListModel::rowForPacketID(const QString &packetID) const
             return row;
     }
     return -1;
+}
+
+QVariantList PacketListModel::snapshotRows() const
+{
+    QVariantList snapshot;
+    snapshot.reserve(m_rows.size());
+    for (const PacketRow &row : m_rows) {
+        QVariantMap map;
+        map.insert(QStringLiteral("number"), QVariant::fromValue(row.number));
+        map.insert(QStringLiteral("length"), row.length);
+        // Older daemons may omit original_length; statistics fall back to length.
+        map.insert(QStringLiteral("originalLength"),
+                   row.originalLength > 0 ? row.originalLength : row.length);
+        map.insert(QStringLiteral("source"), row.source);
+        map.insert(QStringLiteral("sourcePort"), row.sourcePort);
+        map.insert(QStringLiteral("destination"), row.destination);
+        map.insert(QStringLiteral("destinationPort"), row.destinationPort);
+        map.insert(QStringLiteral("protocol"), row.protocol);
+        map.insert(QStringLiteral("client"), row.client);
+        map.insert(QStringLiteral("domain"), row.domain);
+        map.insert(QStringLiteral("direction"), row.direction);
+        snapshot.append(map);
+    }
+    return snapshot;
 }
 
 const QString &PacketListModel::protocolAt(int row) const
