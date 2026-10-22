@@ -25,11 +25,17 @@ SessionController::SessionController(QObject *parent)
     : QObject(parent)
     , m_client(new DaemonClient(this))
     , m_packets(new PacketListModel(this))
+    , m_detailModel(new PacketDetailModel(this))
 {
     connect(m_client, &DaemonClient::connectedChanged, this, &SessionController::handleConnectedChanged);
     connect(m_client, &DaemonClient::response, this, &SessionController::handleResponse);
     connect(m_client, &DaemonClient::failure, this, &SessionController::handleFailure);
     connect(m_client, &DaemonClient::event, this, &SessionController::handleEvent);
+
+    bool parsed = false;
+    const int envRow = qEnvironmentVariableIntValue("TCPVIEWER_SELECT_DETAIL_ROW", &parsed);
+    m_autoSelectDetailRow = parsed && envRow >= 0 ? envRow : -1;
+    m_autoDetailFilter = qEnvironmentVariable("TCPVIEWER_DETAIL_FILTER");
 
     m_pollTimer = new QTimer(this);
     m_pollTimer->setInterval(100);
@@ -196,6 +202,7 @@ void SessionController::selectSource(const QString &sourceID)
 
 void SessionController::selectSourceInternal(const QString &sourceID)
 {
+    clearSelection();
     m_currentSourceID = sourceID;
     m_status.clear();
     m_totalCount = 0;
@@ -231,6 +238,7 @@ void SessionController::applyFilter(const QString &filter)
         resetStream();
         return;
     }
+    clearSelection();
     setFilterTextInternal(filter);
     resetStream();
 }
@@ -245,8 +253,71 @@ void SessionController::setQuickFilters(const QVariantList &quickFilters)
     }
     if (next == m_quickFilters)
         return;
+    clearSelection();
     m_quickFilters = next;
     resetStream();
+}
+
+void SessionController::selectPacket(const QString &packetID)
+{
+    if (packetID.isEmpty()) {
+        clearSelection();
+        return;
+    }
+    if (packetID == m_selectedPacketID)
+        return;
+
+    m_selectedPacketID = packetID;
+    emit selectedPacketIDChanged();
+
+    m_detailModel->clear();
+    m_packetBytes.clear();
+    emit packetBytesChanged();
+    m_detailLoading = true;
+    emit detailLoadingChanged();
+    if (!m_detailError.isEmpty()) {
+        m_detailError.clear();
+        emit detailErrorChanged();
+    }
+
+    QVariantMap detailParams{
+        {QStringLiteral("packet_id"), packetID},
+        {QStringLiteral("max_depth"), 12},
+        {QStringLiteral("max_nodes"), 5000},
+    };
+    QVariantMap byteParams{
+        {QStringLiteral("packet_id"), packetID},
+        {QStringLiteral("offset"), 0},
+        {QStringLiteral("length"), 0},
+        {QStringLiteral("encoding"), QStringLiteral("base64")},
+    };
+    if (!m_currentSourceID.isEmpty()) {
+        detailParams.insert(QStringLiteral("source_id"), m_currentSourceID);
+        byteParams.insert(QStringLiteral("source_id"), m_currentSourceID);
+    }
+    m_client->send(QStringLiteral("packets.details"), detailParams, 60);
+    m_client->send(QStringLiteral("packets.bytes"), byteParams, 60);
+}
+
+void SessionController::clearSelection()
+{
+    if (m_selectedPacketID.isEmpty() && m_packetBytes.isEmpty()
+        && m_detailModel->rowCount() == 0 && m_detailError.isEmpty()) {
+        return;
+    }
+    m_selectedPacketID.clear();
+    emit selectedPacketIDChanged();
+    m_detailModel->clear();
+    m_packetBytes.clear();
+    emit packetBytesChanged();
+    if (m_detailLoading) {
+        m_detailLoading = false;
+        emit detailLoadingChanged();
+    }
+    if (!m_detailError.isEmpty()) {
+        m_detailError.clear();
+        emit detailErrorChanged();
+    }
 }
 
 void SessionController::clearError()
@@ -370,6 +441,23 @@ void SessionController::handleResponse(const QString &command, const QVariantMap
         return;
     }
 
+    if (command == QStringLiteral("packets.details")) {
+        if (data.value(QStringLiteral("packet_id")).toString() != m_selectedPacketID)
+            return;
+        m_detailModel->setNodes(data.value(QStringLiteral("nodes")).toList());
+        m_detailLoading = false;
+        emit detailLoadingChanged();
+        return;
+    }
+
+    if (command == QStringLiteral("packets.bytes")) {
+        if (data.value(QStringLiteral("packet_id")).toString() != m_selectedPacketID)
+            return;
+        m_packetBytes = QByteArray::fromBase64(data.value(QStringLiteral("data")).toByteArray());
+        emit packetBytesChanged();
+        return;
+    }
+
     if (command == QStringLiteral("file.import")) {
         const QVariantList imported = data.value(QStringLiteral("imported")).toList();
         setLoading(false);
@@ -380,6 +468,7 @@ void SessionController::handleResponse(const QString &command, const QVariantMap
     }
 
     if (command == QStringLiteral("packets.clear")) {
+        clearSelection();
         resetStream();
         return;
     }
@@ -408,6 +497,11 @@ void SessionController::handlePackets(const QVariantMap &data)
     if (m_packets->lastPacketID() > m_lastPacketID)
         m_lastPacketID = m_packets->lastPacketID();
 
+    // CI/screenshot hook: always inspect this packet number once rows exist.
+    const QString autoSelect = qEnvironmentVariable("TCPVIEWER_SELECT_PACKET");
+    if (!autoSelect.isEmpty() && m_selectedPacketID.isEmpty() && !rows.isEmpty())
+        selectPacket(autoSelect);
+
     const int pageReceived = rows.size();
     if (pageReceived > 0)
         setLoading(false);
@@ -421,9 +515,20 @@ void SessionController::handlePackets(const QVariantMap &data)
 
 void SessionController::handleFailure(const QString &command, const QString &code, const QString &message)
 {
-    Q_UNUSED(command)
-    Q_UNUSED(code)
     m_requestInFlight = false;
+
+    // Inspector failures stay scoped to the inspector; the table keeps working.
+    if (command == QStringLiteral("packets.details")) {
+        m_detailLoading = false;
+        m_detailError = message;
+        emit detailLoadingChanged();
+        emit detailErrorChanged();
+        return;
+    }
+    if (command == QStringLiteral("packets.bytes"))
+        return;
+
+    Q_UNUSED(code)
     setLoading(false);
     setError(message);
 }

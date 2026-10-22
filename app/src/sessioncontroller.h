@@ -1,8 +1,10 @@
 #pragma once
 
 #include "daemonclient.h"
+#include "packetdetailmodel.h"
 #include "packetmodel.h"
 
+#include <QByteArray>
 #include <QObject>
 #include <QVariantList>
 #include <QVariantMap>
@@ -18,6 +20,15 @@ class SessionController : public QObject
     QML_ELEMENT
     Q_PROPERTY(DaemonClient *client READ client CONSTANT)
     Q_PROPERTY(PacketListModel *packets READ packets CONSTANT)
+    Q_PROPERTY(PacketDetailModel *detailModel READ detailModel CONSTANT)
+    Q_PROPERTY(QByteArray packetBytes READ packetBytes NOTIFY packetBytesChanged)
+    Q_PROPERTY(QString selectedPacketID READ selectedPacketID NOTIFY selectedPacketIDChanged)
+    Q_PROPERTY(bool detailLoading READ detailLoading NOTIFY detailLoadingChanged)
+    Q_PROPERTY(QString detailError READ detailError NOTIFY detailErrorChanged)
+    // Test hook: TCPVIEWER_SELECT_DETAIL_ROW selects a detail row after decode.
+    Q_PROPERTY(int autoSelectDetailRow READ autoSelectDetailRow CONSTANT)
+    // Test hook: TCPVIEWER_DETAIL_FILTER pre-fills the inspector filter field.
+    Q_PROPERTY(QString autoDetailFilter READ autoDetailFilter CONSTANT)
     Q_PROPERTY(QVariantList interfaces READ interfaces NOTIFY interfacesChanged)
     Q_PROPERTY(QVariantList sources READ sources NOTIFY sourcesChanged)
     Q_PROPERTY(QVariantMap status READ status NOTIFY statusChanged)
@@ -37,6 +48,13 @@ public:
 
     DaemonClient *client() const { return m_client; }
     PacketListModel *packets() const { return m_packets; }
+    PacketDetailModel *detailModel() const { return m_detailModel; }
+    QByteArray packetBytes() const { return m_packetBytes; }
+    QString selectedPacketID() const { return m_selectedPacketID; }
+    bool detailLoading() const { return m_detailLoading; }
+    QString detailError() const { return m_detailError; }
+    int autoSelectDetailRow() const { return m_autoSelectDetailRow; }
+    QString autoDetailFilter() const { return m_autoDetailFilter; }
     QVariantList interfaces() const { return m_interfaces; }
     QVariantList sources() const { return m_sources; }
     QVariantMap status() const { return m_status; }
@@ -65,6 +83,8 @@ public:
     Q_INVOKABLE void clearPackets();
     Q_INVOKABLE void applyFilter(const QString &filter);
     Q_INVOKABLE void setQuickFilters(const QVariantList &quickFilters);
+    Q_INVOKABLE void selectPacket(const QString &packetID);
+    Q_INVOKABLE void clearSelection();
     Q_INVOKABLE void clearError();
 
 signals:
@@ -78,6 +98,10 @@ signals:
     void filterTextChanged();
     void errorTextChanged();
     void loadingChanged();
+    void packetBytesChanged();
+    void selectedPacketIDChanged();
+    void detailLoadingChanged();
+    void detailErrorChanged();
     void sourceOpened(const QString &sourceID);
 
 private:
@@ -99,6 +123,7 @@ private:
 
     DaemonClient *m_client = nullptr;
     PacketListModel *m_packets = nullptr;
+    PacketDetailModel *m_detailModel = nullptr;
     QTimer *m_pollTimer = nullptr;
     QTimer *m_statusTimer = nullptr;
 
@@ -117,4 +142,10 @@ private:
     quint64 m_lastPacketID = 0;
     int m_pageSize = 5000;
     QStringList m_pendingOpenFiles;
+    QByteArray m_packetBytes;
+    QString m_selectedPacketID;
+    bool m_detailLoading = false;
+    QString m_detailError;
+    int m_autoSelectDetailRow = -1;
+    QString m_autoDetailFilter;
 };

@@ -16,6 +16,8 @@ ApplicationWindow {
     color: Theme.windowBackground
 
     property bool sidebarVisible: true
+    property bool inspectorVisible: true
+    property string inspectorPlacement: "trailing"
 
     SessionController {
         id: session
@@ -233,6 +235,31 @@ ApplicationWindow {
         }
 
         Row {
+            anchors.right: parent.right
+            anchors.rightMargin: 12
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 6
+
+            ToolbarButton {
+                glyph: "▤"
+                width: 28
+                tooltip: window.inspectorVisible ? "Hide Inspector" : "Show Inspector"
+                onClicked: window.inspectorVisible = !window.inspectorVisible
+            }
+
+            ToolbarButton {
+                glyph: window.inspectorPlacement === "trailing" ? "◫" : "☰"
+                width: 28
+                tooltip: window.inspectorPlacement === "trailing"
+                    ? "Move Inspector to Bottom" : "Move Inspector to Side"
+                onClicked: {
+                    window.inspectorPlacement =
+                        window.inspectorPlacement === "trailing" ? "bottom" : "trailing"
+                }
+            }
+        }
+
+        Row {
             anchors.centerIn: parent
             spacing: 6
 
@@ -294,10 +321,27 @@ ApplicationWindow {
         }
 
         Rectangle {
-            id: workspace
-            color: Theme.contentBackground
-            SplitView.fillWidth: true
-            SplitView.minimumWidth: 480
+            id: contentHost
+            color: "transparent"
+
+            SplitView {
+                id: contentSplit
+                anchors.fill: parent
+                orientation: window.inspectorPlacement === "bottom" ? Qt.Vertical : Qt.Horizontal
+
+                handle: Rectangle {
+                    implicitWidth: 1
+                    implicitHeight: 1
+                    color: Theme.separator
+                }
+
+                Rectangle {
+                    id: workspace
+                    color: Theme.contentBackground
+                    SplitView.fillWidth: true
+                    SplitView.fillHeight: true
+                    SplitView.minimumWidth: 480
+                    SplitView.minimumHeight: 160
 
             QuickFilterBar {
                 id: quickFilter
@@ -368,6 +412,11 @@ ApplicationWindow {
                     model: session.packets
                     follow: true
                     visible: bench.enabled ? bench.view === "table" : (session.packets.count > 0)
+                    onRowClicked: function(index) {
+                        if (bench.enabled)
+                            return
+                        session.selectPacket(session.packets.packetIDAt(index))
+                    }
                 }
 
                 PacketTableListView {
@@ -418,6 +467,32 @@ ApplicationWindow {
                     showOpenAction: false
                 }
             }
+        }
+
+                Inspector {
+                    id: inspector
+                    session: session
+                    visible: window.inspectorVisible && !bench.enabled
+                    SplitView.preferredWidth: window.inspectorPlacement === "trailing" ? 360 : 0
+                    SplitView.minimumWidth: window.inspectorPlacement === "trailing" ? 240 : 0
+                    SplitView.maximumWidth: window.inspectorPlacement === "trailing" ? 600 : 0
+                    SplitView.preferredHeight: window.inspectorPlacement === "bottom" ? 280 : 0
+                    SplitView.minimumHeight: window.inspectorPlacement === "bottom" ? 160 : 0
+                    SplitView.maximumHeight: window.inspectorPlacement === "bottom" ? 560 : 0
+                }
+            }
+        }
+    }
+
+    // Keep the packet table's highlight aligned with the inspector selection.
+    Connections {
+        target: session
+        function onSelectedPacketIDChanged() {
+            if (bench.enabled)
+                return
+            productionTable.selectedIndex = session.selectedPacketID === ""
+                ? -1
+                : session.packets.rowForPacketID(session.selectedPacketID)
         }
     }
 

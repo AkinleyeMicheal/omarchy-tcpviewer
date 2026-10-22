@@ -72,6 +72,8 @@ public:
     // TableView needs the visible-column count; a QAbstractListModel would only
     // instantiate one column per row.
     Q_INVOKABLE void setColumnCount(int count);
+    Q_INVOKABLE QString packetIDAt(int row) const;
+    Q_INVOKABLE int rowForPacketID(const QString &packetID) const;
 
     // Appends a batch in one beginInsertRows/endInsertRows pair, matching the
     // upstream table's coalesced row inserts.

@@ -45,12 +45,15 @@ int main(int argc, char *argv[])
 
     // Deterministic screenshots for headless GUI verification and CI.
     const QString screenshotPath = qEnvironmentVariable("TCPVIEWER_SCREENSHOT");
+    const QString placementOverride = qEnvironmentVariable("TCPVIEWER_INSPECTOR_PLACEMENT");
     if (!screenshotPath.isEmpty()) {
         bool delayOK = false;
         const int delayMs = qEnvironmentVariableIntValue("TCPVIEWER_SCREENSHOT_DELAY_MS", &delayOK);
-        QTimer::singleShot(delayOK && delayMs > 0 ? delayMs : 1500, &app, [&engine, screenshotPath]() {
+        QTimer::singleShot(delayOK && delayMs > 0 ? delayMs : 1500, &app, [&engine, screenshotPath, placementOverride]() {
             if (!engine.rootObjects().isEmpty()) {
                 if (auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst())) {
+                    if (!placementOverride.isEmpty())
+                        window->setProperty("inspectorPlacement", placementOverride);
                     const QImage image = window->grabWindow();
                     if (!image.save(screenshotPath))
                         qWarning("Failed to write screenshot to %s", qPrintable(screenshotPath));

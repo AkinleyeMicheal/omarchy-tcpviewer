@@ -114,6 +114,23 @@ void PacketListModel::clear()
     emit countChanged();
 }
 
+QString PacketListModel::packetIDAt(int row) const
+{
+    if (row < 0 || row >= m_rows.size())
+        return {};
+    return QString::number(m_rows.at(row).number);
+}
+
+int PacketListModel::rowForPacketID(const QString &packetID) const
+{
+    const quint64 id = packetID.toULongLong();
+    for (int row = 0; row < m_rows.size(); ++row) {
+        if (m_rows.at(row).number == id)
+            return row;
+    }
+    return -1;
+}
+
 void PacketListModel::appendRows(const QVector<PacketRow> &rows)
 {
     if (rows.isEmpty())

@@ -13,6 +13,8 @@ qt_policy(SET QTP0001 NEW)
 qt_add_executable(omarchy-tcpviewer
     src/main.cpp
     src/packetmodel.cpp
+    src/packetdetailmodel.cpp
+    src/hexview.cpp
     src/benchmark.cpp
     src/daemonclient.cpp
     src/sessioncontroller.cpp
@@ -29,6 +31,7 @@ set_source_files_properties(qml/Sidebar.qml PROPERTIES QT_RESOURCE_ALIAS Sidebar
 set_source_files_properties(qml/QuickFilterBar.qml PROPERTIES QT_RESOURCE_ALIAS QuickFilterBar.qml)
 set_source_files_properties(qml/StatusStrip.qml PROPERTIES QT_RESOURCE_ALIAS StatusStrip.qml)
 set_source_files_properties(qml/EmptyState.qml PROPERTIES QT_RESOURCE_ALIAS EmptyState.qml)
+set_source_files_properties(qml/Inspector.qml PROPERTIES QT_RESOURCE_ALIAS Inspector.qml)
 set_source_files_properties(qml/Theme.qml PROPERTIES
     QT_RESOURCE_ALIAS Theme.qml
     QT_QML_SINGLETON_TYPE TRUE
@@ -46,8 +49,11 @@ qt_add_qml_module(omarchy-tcpviewer
         qml/QuickFilterBar.qml
         qml/StatusStrip.qml
         qml/EmptyState.qml
+        qml/Inspector.qml
     SOURCES
         src/packetmodel.h
+        src/packetdetailmodel.h
+        src/hexview.h
         src/benchmark.h
         src/daemonclient.h
         src/sessioncontroller.h
