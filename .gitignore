@@ -9,6 +9,9 @@ dist/
 node_modules/
 *.pcap
 *.pcapng
+# Test fixtures are sanitized synthetic/spec captures; see Tests README.
+!daemon/Tests/PcapPlusPlusCoreTests/Fixtures/CaptureFiles/*.pcap
+!daemon/Tests/PcapPlusPlusCoreTests/Fixtures/CaptureFiles/*.pcapng
 *.tcpviewsession
 .env
 *.local.xcconfig

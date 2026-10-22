@@ -84,5 +84,23 @@ let package = Package(
             dependencies: ["TCPViewerIPC"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
+
+        // Upstream fixture/core test suite (ported from the macOS Xcode
+        // project's PcapPlusPlusCoreTests) as the phase-3 regression gate.
+        .testTarget(
+            name: "PcapPlusPlusCoreTests",
+            dependencies: ["PcapPlusPlusCore"],
+            resources: [.copy("Fixtures")],
+            swiftSettings: [.swiftLanguageMode(.v5)],
+            linkerSettings: [
+                .linkedLibrary("wireshark"),
+                .linkedLibrary("wiretap"),
+                .linkedLibrary("wsutil"),
+                .linkedLibrary("glib-2.0"),
+                .linkedLibrary("gobject-2.0"),
+                .linkedLibrary("gmodule-2.0"),
+                .linkedLibrary("pcap"),
+            ]
+        ),
     ]
 )

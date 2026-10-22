@@ -1,0 +1,2149 @@
+//
+//  InspectorPipelineTests.swift
+//  TCPViewer
+//
+//  Created by Proxyman LLC on 23/4/26.
+//
+
+import Foundation
+import Testing
+@testable import PcapPlusPlusCore
+
+@Suite(.serialized)
+struct InspectorPipelineTests {
+
+    @Test func nativeCoreCaptureFilterValidationNormalizesAndRejectsInvalidSyntax() async {
+        let core = NativeTCPViewerCore()
+
+        let empty = await core.validateCaptureFilter("   ")
+        #expect(empty.disposition == .invalid)
+        #expect(empty.normalizedExpression == nil)
+        #expect(empty.message == "Capture filters cannot be empty.")
+
+        let valid = await core.validateCaptureFilter(" tcp port 443 ")
+        #expect(valid.disposition == .valid)
+        #expect(valid.normalizedExpression == "tcp port 443")
+        #expect(valid.message == nil)
+
+        let invalid = await core.validateCaptureFilter("tcp and and")
+        #expect(invalid.disposition == .invalid)
+        #expect(invalid.normalizedExpression == "tcp and and")
+        #expect(invalid.message?.contains("libpcap syntax") == true)
+    }
+
+    @Test func liveCaptureOptionsNormalizeCaptureFilterBeforeSessionSetup() {
+        let options = CaptureOptions(
+            promiscuousMode: true,
+            snapshotLength: 65_535,
+            kernelBufferSizeBytes: 4 * 1024 * 1024,
+            readTimeoutMilliseconds: 250,
+            captureFilterExpression: " tcp port 443 ",
+            stopCondition: .manual
+        )
+
+        let normalized = options.normalizedForLiveCapture()
+
+        #expect(normalized.captureFilterExpression == "tcp port 443")
+    }
+
+    @Test func nativeDetailNodeWithoutWiresharkExpressionKeepsNil() {
+        let descriptor = PCPPNativePacketDetailNodeDescriptor(
+            identifier: "tcpviewer.summary",
+            name: "Summary",
+            fieldName: "tcpviewer.summary",
+            value: "Synthetic summary",
+            rawValue: nil,
+            kind: PacketDetailNodeKind.field.rawValue,
+            severity: PacketDetailNodeSeverity.normal.rawValue,
+            byteRange: nil,
+            jumpTargetPacketIdentifier: nil,
+            children: []
+        )
+
+        #expect(NativeBridgeMapper.packetDetailNode(descriptor).displayFilterExpression == nil)
+    }
+
+    @Test func livePacketBatchBufferFlushesByCountTimerAndStop() {
+        var buffer = LivePacketBatchBuffer<Int>(maxBatchSize: 3)
+
+        #expect(buffer.append([1]) == nil)
+        #expect(buffer.append([2]) == nil)
+        #expect(buffer.append([3]) == [1, 2, 3])
+        #expect(buffer.isEmpty)
+
+        #expect(buffer.append([4, 5]) == nil)
+        #expect(buffer.flush() == [4, 5])
+        #expect(buffer.isEmpty)
+
+        #expect(buffer.append([6]) == nil)
+        #expect(buffer.flush() == [6])
+        #expect(buffer.flush() == nil)
+
+        #expect(buffer.append([7, 8]) == nil)
+        #expect(buffer.pendingCount == 2)
+        buffer.discardPending(releasingCapacity: true)
+        #expect(buffer.isEmpty)
+        #expect(buffer.flush() == nil)
+    }
+
+    @Test func livePacketReanalysisQueueDeduplicatesAndDequeuesByLimit() {
+        var queue = LivePacketReanalysisQueue<Int>()
+
+        _ = queue.enqueue([1, 2, 2, 3])
+        #expect(queue.pendingCount == 3)
+        #expect(queue.dequeue(maxCount: 2) == [1, 2])
+        #expect(queue.pendingCount == 1)
+
+        _ = queue.enqueue([3, 4])
+        #expect(queue.pendingCount == 2)
+        #expect(queue.dequeue(maxCount: 10) == [3, 4])
+        #expect(queue.isEmpty)
+
+        _ = queue.enqueue([5, 6])
+        queue.discardPending(releasingCapacity: true)
+        #expect(queue.dequeue(maxCount: 10).isEmpty)
+    }
+
+    @Test func livePacketReanalysisQueueKeepsRecentPacketsWithinItsBound() {
+        var queue = LivePacketReanalysisQueue<Int>(maxPendingCount: 3)
+
+        #expect(queue.enqueue([1, 2, 3]) == [])
+        #expect(queue.enqueue([4, 5]) == [1, 2])
+        #expect(queue.pendingCount == 3)
+        #expect(queue.dequeue(maxCount: 10) == [3, 4, 5])
+    }
+
+    @Test func wiresharkUnavailableBackendFailsOpenWithUnavailableFeature() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("wireshark-unavailable.pcap")
+        try writePCAP(to: captureURL, packets: [makeIPv4UDPPayloadPacket()])
+
+        do {
+            _ = try await wiresharkDisabledCore().openOfflineCaptureDocument(at: captureURL)
+            Issue.record("Expected the disabled Wireshark backend to fail the offline open.")
+        } catch let error as TCPViewerCoreError {
+            #expect(error.code == .unavailableFeature)
+        }
+    }
+
+    @Test func availableWiresharkBackendDoesNotRenderFallbackStatusNode() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("wireshark-details.pcap")
+        try writePCAP(to: captureURL, packets: [makeIPv4UDPPayloadPacket()])
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let packet = try #require(try await document.open().first)
+        let inspection = try await document.inspectPacket(id: packet.id)
+
+        #expect(findNode(in: inspection.detailNodes, id: "wireshark.status") == nil)
+        #expect(findNode(in: inspection.detailNodes, id: "wireshark.fallback") == nil)
+        #expect(findNode(in: inspection.detailNodes, fieldName: "udp.length")?.byteRange == PacketByteRange(offset: 38, length: 2))
+    }
+
+    @Test func oversizedPayloadDoesNotExposeAnUnboundedDisplayFilterExpression() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("oversized-display-filter-value.pcap")
+        let payload = Array(repeating: UInt8(0xab), count: 8 * 1_024)
+        try writePCAP(to: captureURL, packets: [makeIPv4UDPPayloadPacket(payload: payload)])
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let packet = try #require(try await document.open().first)
+        let inspection = try await document.inspectPacket(id: packet.id)
+        let payloadNode = try #require(findNode(in: inspection.detailNodes, fieldName: "data.data"))
+
+        #expect(payloadNode.byteRange?.length == payload.count)
+        #expect(payloadNode.displayFilterExpression == nil)
+        #expect(findNode(in: inspection.detailNodes, fieldName: "udp")?.displayFilterExpression == "udp")
+        #expect(findNode(in: inspection.detailNodes, fieldName: "udp.length")?.displayFilterExpression != nil)
+    }
+
+    @Test func inspectionDataRemainsValidAfterNativeResultRelease() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("copied-inspection.pcap")
+        try writePCAP(to: captureURL, packets: [makeIPv4UDPPayloadPacket()])
+
+        var copiedInspection: PacketInspection?
+        do {
+            let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+            let packet = try #require(try await document.open().first)
+            copiedInspection = try await document.inspectPacket(id: packet.id)
+        }
+
+        let inspection = try #require(copiedInspection)
+        let udpLength = try #require(findNode(in: inspection.detailNodes, fieldName: "udp.length"))
+        #expect(udpLength.rawValue == "00 0c")
+        #expect(inspection.byteViews.first?.bytes == makeIPv4UDPPayloadPacket())
+    }
+
+    @Test func offlinePcapNgInterfaceNamesFlowIntoFrameDetails() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("named-interfaces.pcapng")
+        try writePCAPNG(
+            to: captureURL,
+            interfaces: ["alpha0", "beta1"],
+            packets: [(packet: makeIPv4UDPPayloadPacket(), interfaceID: 1)]
+        )
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let packets = try await document.open()
+        let packet = try #require(packets.first)
+
+        #expect(packet.captureMetadata.interfaceName == "beta1")
+
+        let inspection = try await document.inspectPacket(id: packet.id)
+        let interfaceNode = try #require(findNode(in: inspection.detailNodes, fieldName: "frame.interface_id"))
+        #expect(interfaceNode.value?.contains("1") == true)
+    }
+
+    @Test func generatedPcapAndPcapNgOpenWithSummariesRawBytesAndDetails() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let fixtures: [(URL, CaptureFileFormat)] = [
+            (directory.appendingPathComponent("generated.pcap"), .pcap),
+            (directory.appendingPathComponent("generated.pcapng"), .pcapng),
+        ]
+        let packets = [makeIPv4UDPPayloadPacket(), makeIPv4DNSResponsePacket()]
+        try writePCAP(to: fixtures[0].0, packets: packets)
+        try writePCAPNG(to: fixtures[1].0, interfaces: ["en0"], packets: packets.map { (packet: $0, interfaceID: 0) })
+
+        for (captureURL, format) in fixtures {
+            let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+            let summaries = try await document.open()
+            let firstPacket = try #require(summaries.first)
+
+            #expect(document.currentMetadata().format == format)
+            #expect(summaries.count == 2)
+            #expect(summaries.map(\.packetNumber) == [1, 2])
+            #expect(firstPacket.transportHint == .udp)
+            #expect(firstPacket.endpoints.source.address == "192.168.0.1")
+            #expect(firstPacket.endpoints.destination.address == "192.168.0.2")
+            #expect(firstPacket.originalLength == packets[0].count)
+            #expect(firstPacket.capturedLength == packets[0].count)
+
+            let inspection = try await document.inspectPacket(id: firstPacket.id)
+            #expect(inspection.rawBytes == packets[0])
+            #expect(inspection.decodeStatus.kind == .complete)
+            #expect(findNode(in: inspection.detailNodes, fieldName: "udp.length")?.byteRange == PacketByteRange(offset: 38, length: 2))
+        }
+    }
+
+    @Test func multipleOfflineDocumentsTransferWiresharkDetailsWhenSelectionChanges() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let firstURL = directory.appendingPathComponent("first.pcap")
+        let secondURL = directory.appendingPathComponent("second.pcap")
+        try writePCAP(to: firstURL, packets: [makeIPv4UDPPayloadPacket()])
+        try writePCAP(to: secondURL, packets: [makeIPv4DNSResponsePacket()])
+
+        let core = NativeTCPViewerCore()
+        let firstDocument = try await core.openOfflineCaptureDocument(at: firstURL)
+        let secondDocument = try await core.openOfflineCaptureDocument(at: secondURL)
+        let firstPacket = try #require(try await firstDocument.open().first)
+        let secondPacket = try #require(try await secondDocument.open().first)
+
+        #expect(!firstDocument.loadProgress().isPartialResult)
+        #expect(!secondDocument.loadProgress().isPartialResult)
+        #expect(findNode(in: try await firstDocument.inspectPacket(id: firstPacket.id).detailNodes, fieldName: "udp") != nil)
+        #expect(findNode(in: try await secondDocument.inspectPacket(id: secondPacket.id).detailNodes, fieldName: "dns") != nil)
+    }
+
+    @Test func bigEndianPcapNgOpensWithSummariesRawBytesAndDetails() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("big-endian.pcapng")
+        try writeBigEndianPCAPNG(to: captureURL, packets: [makeIPv4UDPPayloadPacket()])
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let summaries = try await document.open()
+        let packet = try #require(summaries.first)
+
+        #expect(document.currentMetadata().format == .pcapng)
+        #expect(summaries.count == 1)
+        #expect(packet.packetNumber == 1)
+        #expect(packet.transportHint == .udp)
+        #expect(packet.endpoints.source.address == "192.168.0.1")
+
+        let inspection = try await document.inspectPacket(id: packet.id)
+        #expect(inspection.rawBytes == makeIPv4UDPPayloadPacket())
+        #expect(findNode(in: inspection.detailNodes, fieldName: "udp.length")?.byteRange == PacketByteRange(offset: 38, length: 2))
+    }
+
+    @Test func bundledSanitizedSampleCapturesOpenWithExpectedPacketData() async throws {
+        let fixtures: [(fileName: String, format: CaptureFileFormat)] = [
+            ("tinyshield-sanitized-sample.pcap", .pcap),
+            ("tinyshield-sanitized-sample.pcapng", .pcapng),
+        ]
+
+        for fixture in fixtures {
+            let captureURL = try bundledCaptureFixtureURL(fileName: fixture.fileName)
+            let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+            let summaries = try await document.open()
+            let firstPacket = try #require(summaries.first)
+            let secondPacket = try #require(summaries.dropFirst().first)
+
+            #expect(document.currentMetadata().format == fixture.format)
+            #expect(summaries.count == 2)
+            #expect(summaries.map(\.packetNumber) == [1, 2])
+            #expect(firstPacket.transportHint == .udp)
+            #expect(firstPacket.endpoints.source.address == "192.168.0.1")
+            #expect(firstPacket.endpoints.destination.address == "192.168.0.2")
+            #expect(secondPacket.transportHint == .dns)
+            #expect(secondPacket.endpoints.source.address == "192.168.0.2")
+            #expect(secondPacket.endpoints.destination.address == "192.168.0.1")
+
+            let firstInspection = try await document.inspectPacket(id: firstPacket.id)
+            #expect(firstInspection.rawBytes == makeIPv4UDPPayloadPacket())
+            #expect(findNode(in: firstInspection.detailNodes, fieldName: "udp.length")?.byteRange == PacketByteRange(offset: 38, length: 2))
+
+            let dnsInspection = try await document.inspectPacket(id: secondPacket.id)
+            let dnsNode = try #require(findNode(in: dnsInspection.detailNodes, fieldName: "dns"))
+            #expect(dnsInspection.rawBytes == makeIPv4DNSResponsePacket())
+            #expect(findNode(in: dnsNode.children, fieldName: "dns.qry.name")?.value == "www.example.com")
+            #expect(findNode(in: dnsNode.children, fieldName: "dns.a")?.value == "93.184.216.34")
+        }
+    }
+
+    @Test func malformedPcapNgPacketRecordIsSkippedAndLaterPacketsStillLoad() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("recoverable-malformed.pcapng")
+        try writePCAPNGWithMalformedPacketBetweenValidPackets(to: captureURL)
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let summaries = try await document.open()
+        let progress = document.loadProgress()
+
+        #expect(summaries.count == 2)
+        #expect(summaries.map(\.packetNumber) == [1, 2])
+        #expect(summaries.map(\.transportHint) == [.udp, .dns])
+        #expect(progress.phase == .completed)
+        #expect(progress.isPartialResult)
+        #expect(progress.message.contains("Skipped 1 malformed packet record"))
+
+        let secondInspection = try await document.inspectPacket(id: summaries[1].id)
+        #expect(secondInspection.rawBytes == makeIPv4DNSResponsePacket())
+        #expect(findNode(in: secondInspection.detailNodes, fieldName: "dns") != nil)
+    }
+
+    @Test func invalidCaptureMagicFailsOfflineOpen() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("invalid-magic.pcap")
+        try Data(repeating: 0xEE, count: 32).write(to: captureURL)
+
+        do {
+            _ = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+            Issue.record("Expected invalid capture magic to fail.")
+        } catch let error as TCPViewerCoreError {
+            #expect(error.code == .offlineFileOpenFailed)
+            #expect(error.message.contains("not PCAP or PCAPNG"))
+        }
+    }
+
+    @Test func invalidPcapNgSectionHeaderFailsOfflineOpen() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("truncated-section-header.pcapng")
+        try Data([0x0a, 0x0d, 0x0d, 0x0a]).write(to: captureURL)
+
+        do {
+            _ = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+            Issue.record("Expected invalid PCAPNG section header to fail.")
+        } catch let error as TCPViewerCoreError {
+            #expect(error.code == .offlineFileOpenFailed)
+            #expect(error.message.contains("PCAPNG section header"))
+        }
+    }
+
+    @Test func generatedCaptureInspectionCoversWiresharkFieldsAndByteRanges() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("generated-protocols.pcap")
+        try writePCAP(
+            to: captureURL,
+            packets: [
+                makeARPRequestPacket(),
+                makeIPv4TCPPayloadPacket(),
+                makeIPv4UDPPayloadPacket(),
+                makeIPv6UDPPayloadPacket(),
+                makeIPv4ICMPEchoRequestPacket(),
+                makeIPv6ICMPEchoRequestPacket(),
+            ]
+        )
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let packets = try await document.open()
+
+        #expect(packets.count == 6)
+        #expect(packets.map(\.transportHint) == [.arp, .tcp, .udp, .udp, .icmp, .icmp])
+
+        let arpInspection = try await document.inspectPacket(id: packets[0].id)
+        #expect(arpInspection.decodeStatus.kind == .complete)
+        #expect(findNode(in: arpInspection.detailNodes, fieldName: "wireshark.fallback") == nil)
+        let ethDestination = try #require(findNode(in: arpInspection.detailNodes, fieldName: "eth.dst"))
+        #expect(ethDestination.rawValue == "ff ff ff ff ff ff")
+        #expect(ethDestination.byteRange == PacketByteRange(offset: 0, length: 6))
+        let arpSenderIP = try #require(findNode(in: arpInspection.detailNodes, fieldName: "arp.src.proto_ipv4"))
+        #expect(arpSenderIP.value == "192.168.0.1")
+        #expect(arpSenderIP.byteRange == PacketByteRange(offset: 28, length: 4))
+
+        let tcpInspection = try await document.inspectPacket(id: packets[1].id)
+        #expect(findNode(in: tcpInspection.detailNodes, fieldName: "tcp") != nil)
+        let ipv4Source = try #require(findNode(in: tcpInspection.detailNodes, fieldName: "ip.src"))
+        let ipv4Version = try #require(findNode(in: tcpInspection.detailNodes, fieldName: "ip.version"))
+        let ipv4DontFragment = try #require(findNode(in: tcpInspection.detailNodes, fieldName: "ip.flags.df"))
+        #expect(ipv4Source.value == "192.168.0.1")
+        #expect(ipv4Source.byteRange == PacketByteRange(offset: 26, length: 4))
+        #expect(ipv4Version.byteRange == PacketByteRange(offset: 14, length: 1, bitOffset: 0, bitLength: 4, hasBitRange: true))
+        #expect(ipv4DontFragment.value?.localizedCaseInsensitiveContains("set") == true)
+        let tcpDestinationPort = try #require(findNode(in: tcpInspection.detailNodes, fieldName: "tcp.dstport"))
+        #expect(tcpDestinationPort.value?.contains("4321") == true)
+        #expect(tcpDestinationPort.byteRange == PacketByteRange(offset: 36, length: 2))
+        #expect(tcpDestinationPort.rawValue == "10 e1")
+        let tcpAckFlag = try #require(findNode(in: tcpInspection.detailNodes, fieldName: "tcp.flags.ack"))
+        #expect(tcpAckFlag.value?.localizedCaseInsensitiveContains("set") == true)
+
+        let udpInspection = try await document.inspectPacket(id: packets[2].id)
+        let udpLength = try #require(findNode(in: udpInspection.detailNodes, fieldName: "udp.length"))
+        #expect(udpLength.value?.contains("12") == true)
+        #expect(udpLength.byteRange == PacketByteRange(offset: 38, length: 2))
+        #expect(findNode(in: udpInspection.detailNodes, fieldName: "udp.checksum.status") != nil)
+
+        let ipv6Inspection = try await document.inspectPacket(id: packets[3].id)
+        #expect(findNode(in: ipv6Inspection.detailNodes, fieldName: "ipv6") != nil)
+        let ipv6Source = try #require(findNode(in: ipv6Inspection.detailNodes, fieldName: "ipv6.src"))
+        #expect(ipv6Source.value == "2001:db8::1")
+        #expect(ipv6Source.byteRange == PacketByteRange(offset: 22, length: 16))
+        #expect(findNode(in: ipv6Inspection.detailNodes, fieldName: "udp.checksum.status") != nil)
+
+        let icmpInspection = try await document.inspectPacket(id: packets[4].id)
+        let icmpType = try #require(findNode(in: icmpInspection.detailNodes, fieldName: "icmp.type"))
+        #expect(icmpType.value?.localizedCaseInsensitiveContains("echo") == true)
+        #expect(findNode(in: icmpInspection.detailNodes, fieldName: "icmp.ident")?.byteRange == PacketByteRange(offset: 38, length: 2))
+        #expect(findNode(in: icmpInspection.detailNodes, fieldName: "icmp.seq")?.byteRange == PacketByteRange(offset: 40, length: 2))
+
+        let icmpv6Inspection = try await document.inspectPacket(id: packets[5].id)
+        let icmpv6Type = try #require(findNode(in: icmpv6Inspection.detailNodes, fieldName: "icmpv6.type"))
+        #expect(icmpv6Type.value?.localizedCaseInsensitiveContains("echo") == true)
+        #expect(
+            findNode(in: icmpv6Inspection.detailNodes, fieldName: "icmpv6.echo.identifier")?.byteRange == PacketByteRange(offset: 58, length: 2)
+                || findNode(in: icmpv6Inspection.detailNodes, fieldName: "icmpv6.identifier")?.byteRange == PacketByteRange(offset: 58, length: 2)
+        )
+        #expect(
+            findNode(in: icmpv6Inspection.detailNodes, fieldName: "icmpv6.echo.sequence_number")?.byteRange == PacketByteRange(offset: 60, length: 2)
+                || findNode(in: icmpv6Inspection.detailNodes, fieldName: "icmpv6.sequence")?.byteRange == PacketByteRange(offset: 60, length: 2)
+        )
+    }
+
+    @Test func tlsApplicationDataWithoutHandshakeUsesWiresharkTCPPayloadDetails() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("tls-application-data.pcap")
+        try writePCAP(
+            to: captureURL,
+            packets: [
+                makeIPv4TLSApplicationDataPacket(recordVersion: 0x0301),
+                makeIPv4TLSApplicationDataPacket(recordVersion: 0x0303),
+            ]
+        )
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let packets = try await document.open()
+        let firstPacket = try #require(packets.first)
+        let secondPacket = try #require(packets.dropFirst().first)
+
+        #expect(packets.map(\.transportHint) == [.tls, .tls])
+        #expect(firstPacket.layers.contains { $0.name == "TLSv1.0" })
+        #expect(secondPacket.layers.contains { $0.name == "TLSv1.2" })
+
+        let inspection = try await document.inspectPacket(id: secondPacket.id)
+        let tcpPayload = try #require(findNode(in: inspection.detailNodes, fieldName: "tcp.payload"))
+        #expect(tcpPayload.byteRange == PacketByteRange(offset: 54, length: 9))
+        #expect(tcpPayload.rawValue?.hasSuffix("de ad be ef") == true)
+        let payloadExpression = try #require(tcpPayload.displayFilterExpression)
+        let validation = await document.activateDisplayFilter(payloadExpression, generation: 41)
+        #expect(validation.status == .valid)
+        let matches = try await document.evaluateDisplayFilter(packetIDs: packets.map(\.id), generation: 41)
+        #expect(matches.matchingPacketIDs == [secondPacket.id])
+        #expect(findNode(in: inspection.detailNodes, fieldName: "wireshark.fallback") == nil)
+    }
+
+    @Test func tlsHandshakeSummariesExposeHelloTypesAndSNI() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("tls-handshakes.pcap")
+        try writePCAP(
+            to: captureURL,
+            packets: [
+                makeIPv4TLSClientHelloPacket(hostName: "www.google.com"),
+                makeIPv4TLSServerHelloPacket(),
+            ]
+        )
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let packets = try await document.open()
+        let clientHello = try #require(packets.first)
+        let serverHello = try #require(packets.dropFirst().first)
+
+        #expect(clientHello.transportHint == .tls)
+        #expect(clientHello.streamID != nil)
+        #expect(serverHello.streamID == clientHello.streamID)
+        #expect(clientHello.protocolSummary?.localizedCaseInsensitiveContains("TLS") == true)
+        #expect(clientHello.sniDomainName == "www.google.com")
+        #expect(clientHello.infoSummary.localizedCaseInsensitiveContains("Client Hello"))
+        #expect(serverHello.infoSummary.localizedCaseInsensitiveContains("Server Hello"))
+
+        let inspection = try await document.inspectPacket(id: clientHello.id)
+        let tlsNode = try #require(findNode(in: inspection.detailNodes, fieldName: "tls"))
+        let serverNameNode = try #require(findNode(in: tlsNode.children, fieldName: "tls.handshake.extensions_server_name"))
+        let tlsExpression = try #require(tlsNode.displayFilterExpression)
+        #expect(tlsExpression == "tls")
+        #expect(findNode(in: tlsNode.children, fieldName: "tls.handshake.type")?.value?.localizedCaseInsensitiveContains("client hello") == true)
+        #expect(serverNameNode.value == "www.google.com")
+        #expect(serverNameNode.displayFilterExpression == "tls.handshake.extensions_server_name == \"www.google.com\"")
+
+        let tlsValidation = await document.activateDisplayFilter(tlsExpression, generation: 42)
+        #expect(tlsValidation.status == .valid)
+        let tlsMatches = try await document.evaluateDisplayFilter(packetIDs: packets.map(\.id), generation: 42)
+        #expect(Set(tlsMatches.matchingPacketIDs) == Set(packets.map(\.id)))
+
+        let serverInspection = try await document.inspectPacket(id: serverHello.id)
+        let cipherSuiteNode = try #require(findNode(in: serverInspection.detailNodes, fieldName: "tls.handshake.ciphersuite"))
+        let cipherSuiteExpression = try #require(cipherSuiteNode.displayFilterExpression)
+        #expect(cipherSuiteExpression == "tls.handshake.ciphersuite == 0x1301")
+
+        let cipherSuiteValidation = await document.activateDisplayFilter(cipherSuiteExpression, generation: 43)
+        #expect(cipherSuiteValidation.status == .valid)
+        let cipherSuiteMatches = try await document.evaluateDisplayFilter(packetIDs: packets.map(\.id), generation: 43)
+        #expect(cipherSuiteMatches.matchingPacketIDs.contains(serverHello.id))
+    }
+
+    @Test func wiresharkDisplayFilterMatchesSNIAndKeepsPreviousFilterAfterInvalidApply() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("display-filter-sni.pcap")
+        let hostName = "display-filter.example"
+        try writePCAP(
+            to: captureURL,
+            packets: [
+                makeIPv4TLSClientHelloPacket(hostName: hostName),
+                makeIPv4TLSServerHelloPacket(),
+            ]
+        )
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let packets = try await document.open()
+        let clientHello = try #require(packets.first)
+        let inspection = try await document.inspectPacket(id: clientHello.id)
+        let serverNameNode = try #require(findNode(in: inspection.detailNodes, fieldName: "tls.handshake.extensions_server_name"))
+        let expression = try #require(serverNameNode.displayFilterExpression)
+        #expect(expression == "tls.handshake.extensions_server_name == \"\(hostName)\"")
+
+        let validation = await document.activateDisplayFilter(expression, generation: 41)
+        #expect(validation.status == .valid)
+
+        let firstBatch = try await document.evaluateDisplayFilter(packetIDs: packets.map(\.id), generation: 41)
+        #expect(firstBatch.evaluatedPacketIDs == packets.map(\.id))
+        #expect(firstBatch.matchingPacketIDs == [clientHello.id])
+
+        let invalid = await document.activateDisplayFilter("tcp.port ==", generation: 42)
+        #expect(invalid.status == .invalid)
+
+        let preservedBatch = try await document.evaluateDisplayFilter(packetIDs: packets.map(\.id), generation: 41)
+        #expect(preservedBatch.matchingPacketIDs == [clientHello.id])
+    }
+
+    @Test func wiresharkDisplayFilterSemanticsMatchAcrossPcapAndPcapNg() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let httpConversation = makeIPv4HTTPConversationPackets()
+        let rawPackets = [
+            makeIPv4TCPPayloadPacket(),
+            makeIPv4UDPPayloadPacket(),
+            makeIPv4DNSResponsePacket(),
+            httpConversation[0],
+            httpConversation[1],
+            httpConversation[2],
+            makeIPv4TLSClientHelloPacket(hostName: "api.example.com"),
+            makeIPv6UDPPayloadPacket(),
+            makeUnknownEtherTypePacket(etherType: 0xb681, byteCount: 66),
+        ]
+        let pcapURL = directory.appendingPathComponent("display-filter-semantics.pcap")
+        let pcapNGURL = directory.appendingPathComponent("display-filter-semantics.pcapng")
+        try writePCAP(to: pcapURL, packets: rawPackets)
+        try writePCAPNG(
+            to: pcapNGURL,
+            interfaces: ["test0"],
+            packets: rawPackets.map { (packet: $0, interfaceID: 0) }
+        )
+
+        let expectedPacketNumbersByExpression: [(String, [UInt64])] = [
+            ("tcp", [1, 4, 5, 6, 7]),
+            ("udp", [2, 3, 8]),
+            ("dns", [3]),
+            ("http.request.method == \"GET\"", [6]),
+            ("tls.handshake.extensions_server_name == \"api.example.com\"", [7]),
+            ("ip.version == 4", [1, 2, 3, 4, 5, 6, 7]),
+            ("ipv6 && udp", [8]),
+            ("tcp.port any_eq 443", [7]),
+            ("tcp.payload[0:3] == 47:45:54", [6]),
+            ("http.host matches r\"(?i)^example\\.com$\"", [6]),
+            ("upper(http.host) == \"EXAMPLE.COM\"", [6]),
+            ("_ws.col.protocol == \"HTTP\"", [6]),
+            ("udp.dstport == udp.srcport + 1000", [2]),
+            ("frame[0:2] == 66:77", [1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            ("eth.type#1 == 0x0800", [1, 2, 3, 4, 5, 6, 7]),
+            ("@tcp.srcport == d4:31", [4, 6, 7]),
+            ("count(ip.addr) == 2", [1, 2, 3, 4, 5, 6, 7]),
+            ("any ip.addr == 192.168.0.1", [1, 2, 3, 4, 5, 6, 7]),
+        ]
+
+        for captureURL in [pcapURL, pcapNGURL] {
+            let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+            let packets = try await document.open()
+            let httpPacket = try #require(packets.first { $0.packetNumber == 6 })
+            let httpInspection = try await document.inspectPacket(id: httpPacket.id)
+            let methodExpression = try #require(findNode(
+                in: httpInspection.detailNodes,
+                fieldName: "http.request.method"
+            )?.displayFilterExpression)
+            let hostExpression = try #require(findNode(
+                in: httpInspection.detailNodes,
+                fieldName: "http.host"
+            )?.displayFilterExpression)
+            #expect(methodExpression == "http.request.method == \"GET\"")
+            #expect(hostExpression == "http.host == \"example.com\"")
+
+            for (offset, expression) in [methodExpression, hostExpression].enumerated() {
+                let generation = UInt64(1_000 + offset)
+                let validation = await document.activateDisplayFilter(expression, generation: generation)
+                #expect(validation.status == .valid)
+                let batch = try await document.evaluateDisplayFilter(
+                    packetIDs: packets.map(\.id),
+                    generation: generation
+                )
+                #expect(batch.matchingPacketIDs == [httpPacket.id])
+            }
+
+            for (offset, expectation) in expectedPacketNumbersByExpression.enumerated() {
+                let generation = UInt64(offset + 1)
+                let validation = await document.activateDisplayFilter(expectation.0, generation: generation)
+                #expect(validation.status == .valid, "Rejected `\(expectation.0)` in \(captureURL.lastPathComponent)")
+                guard validation.isApplicable else {
+                    continue
+                }
+                let batch = try await document.evaluateDisplayFilter(
+                    packetIDs: packets.map(\.id),
+                    generation: generation
+                )
+                let matches = Set(batch.matchingPacketIDs)
+                let matchingPacketNumbers = packets.filter { matches.contains($0.id) }.map(\.packetNumber)
+                #expect(
+                    matchingPacketNumbers == expectation.1,
+                    "`\(expectation.0)` drifted in \(captureURL.lastPathComponent)"
+                )
+            }
+        }
+    }
+
+    @Test func cleartextHTTP2InspectorRowsExposeExecutableDisplayFilters() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("http2-cleartext.pcap")
+        try writePCAP(to: captureURL, packets: [makeIPv4HTTP2RequestPacket()])
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let packets = try await document.open()
+        let packet = try #require(packets.first)
+        #expect(packet.protocolSummary == "HTTP2")
+        let inspection = try await document.inspectPacket(id: packet.id)
+        let methodNode = try #require(findNode(in: inspection.detailNodes, fieldName: "http2.headers.method"))
+        let authorityNode = try #require(findNode(in: inspection.detailNodes, fieldName: "http2.headers.authority"))
+        let pathNode = try #require(findNode(in: inspection.detailNodes, fieldName: "http2.headers.path"))
+        let streamIDNode = try #require(findFirstNode(in: inspection.detailNodes) {
+            $0.fieldName == "http2.streamid" && $0.displayFilterExpression == "http2.streamid == 1"
+        })
+        let frameTypeNode = try #require(findFirstNode(in: inspection.detailNodes) {
+            $0.fieldName == "http2.type" && $0.displayFilterExpression == "http2.type == 1"
+        })
+        let dataNode = try #require(findNode(in: inspection.detailNodes, fieldName: "http2.data.data"))
+
+        #expect(methodNode.value == "GET")
+        #expect(methodNode.displayFilterExpression == "http2.headers.method == \"GET\"")
+        #expect(authorityNode.value == "example.com")
+        #expect(authorityNode.displayFilterExpression == "http2.headers.authority == \"example.com\"")
+        #expect(pathNode.value == "/")
+        #expect(pathNode.displayFilterExpression == "http2.headers.path == \"/\"")
+        #expect(streamIDNode.displayFilterExpression == "http2.streamid == 1")
+        #expect(frameTypeNode.displayFilterExpression == "http2.type == 1")
+        #expect(dataNode.displayFilterExpression == "http2.data.data == 68:65:6c:6c:6f")
+
+        let expressions = try [methodNode, authorityNode, pathNode, streamIDNode, frameTypeNode, dataNode]
+            .map { try #require($0.displayFilterExpression) }
+        for (offset, expression) in expressions.enumerated() {
+            let generation = UInt64(100 + offset)
+            let validation = await document.activateDisplayFilter(expression, generation: generation)
+            #expect(validation.status == .valid)
+            let matches = try await document.evaluateDisplayFilter(packetIDs: [packet.id], generation: generation)
+            #expect(matches.matchingPacketIDs == [packet.id])
+        }
+    }
+
+    @Test func splitTCPTLSClientHelloProducesSNIFromWiresharkState() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("split-client-hello.pcap")
+        let hostName = "split.example.com"
+        try writePCAP(to: captureURL, packets: makeIPv4TLSSplitClientHelloPackets(hostName: hostName))
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let packets = try await document.open()
+        let packetWithSNI = try #require(packets.first { $0.sniDomainName == hostName })
+
+        #expect(packetWithSNI.transportHint == .tls)
+        #expect(packetWithSNI.infoSummary.localizedCaseInsensitiveContains("Client Hello"))
+
+        let inspection = try await document.inspectPacket(id: packetWithSNI.id)
+        #expect(findNode(in: inspection.detailNodes, fieldName: "tls.handshake.extensions_server_name")?.value == hostName)
+    }
+
+    @Test func splitTLSClientHelloStaysReassembledAfterAnotherDocumentTakesWireshark() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("split-client-hello.pcap")
+        let otherCaptureURL = directory.appendingPathComponent("other.pcap")
+        let hostName = "split.example.com"
+        try writePCAP(to: captureURL, packets: makeIPv4TLSSplitClientHelloPackets(hostName: hostName))
+        try writePCAP(to: otherCaptureURL, packets: [makeIPv4UDPPayloadPacket()])
+
+        let core = NativeTCPViewerCore()
+        let document = try await core.openOfflineCaptureDocument(at: captureURL)
+        let packets = try await document.open()
+        let packetWithSNI = try #require(packets.first { $0.sniDomainName == hostName })
+        // Loading another capture releases this document's process-global Wireshark state.
+        _ = try await core.openOfflineCaptureDocument(at: otherCaptureURL).open()
+
+        let inspection = try await document.inspectPacket(id: packetWithSNI.id)
+        #expect(findNode(in: inspection.detailNodes, fieldName: "tls.handshake.extensions_server_name")?.value == hostName)
+    }
+
+    @Test func tcpSynInspectionExpandsFlagsAndOptions() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("tcp-syn-options.pcap")
+        try writePCAP(to: captureURL, packets: [makeIPv4TCPSYNOptionsPacket()])
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let packets = try await document.open()
+        let packet = try #require(packets.first)
+        let inspection = try await document.inspectPacket(id: packet.id)
+
+        let tcpSegmentLength = try #require(findNode(in: inspection.detailNodes, fieldName: "tcp.len"))
+        #expect(tcpSegmentLength.value == "0")
+        let tcpFlags = try #require(findNode(in: inspection.detailNodes, fieldName: "tcp.flags"))
+        #expect(tcpFlags.value?.contains("SYN") == true)
+        #expect(tcpFlags.value?.contains("ECE") == true)
+        #expect(tcpFlags.value?.contains("CWR") == true)
+        #expect(tcpFlags.byteRange == PacketByteRange(offset: 46, length: 2, bitOffset: 4, bitLength: 12, hasBitRange: true))
+        #expect(findNode(in: tcpFlags.children, fieldName: "tcp.flags.syn")?.value?.localizedCaseInsensitiveContains("set") == true)
+        #expect(findNode(in: tcpFlags.children, fieldName: "tcp.flags.ece")?.value?.localizedCaseInsensitiveContains("set") == true)
+        #expect(findNode(in: tcpFlags.children, fieldName: "tcp.flags.cwr")?.value?.localizedCaseInsensitiveContains("set") == true)
+
+        let rawSequence = try #require(findNode(in: inspection.detailNodes, fieldName: "tcp.seq_raw"))
+        #expect(rawSequence.value == "2849299978")
+        #expect(rawSequence.byteRange == PacketByteRange(offset: 38, length: 4))
+        let options = try #require(findNode(in: inspection.detailNodes, fieldName: "tcp.options"))
+        #expect(options.byteRange == PacketByteRange(offset: 54, length: 24))
+        #expect(findNode(in: options.children, fieldName: "tcp.options.mss_val")?.value?.contains("1440") == true)
+        #expect(findNode(in: options.children, fieldName: "tcp.options.wscale.shift")?.value?.contains("6") == true)
+        #expect(findNode(in: options.children, fieldName: "tcp.options.timestamp.tsval")?.value == "663237127")
+        #expect(findNode(in: options.children, fieldName: "tcp.options.sack_perm") != nil)
+    }
+
+    @Test func dnsInspectionRendersHeaderFlagsAndRecords() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("dns-response.pcap")
+        try writePCAP(to: captureURL, packets: [makeIPv4DNSResponsePacket()])
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let packets = try await document.open()
+        let packet = try #require(packets.first)
+        let inspection = try await document.inspectPacket(id: packet.id)
+
+        #expect(packet.transportHint == .dns)
+        #expect(packet.protocolSummary?.localizedCaseInsensitiveContains("DNS") == true)
+        #expect(packet.dnsResolutions == [DNSResolutionObservation(
+            domainName: "www.example.com",
+            ipAddress: "93.184.216.34",
+            timeToLive: 60
+        )])
+        let dnsNode = try #require(findNode(in: inspection.detailNodes, fieldName: "dns"))
+        #expect(findNode(in: dnsNode.children, fieldName: "dns.id")?.value == "0x1234")
+        #expect(findNode(in: dnsNode.children, fieldName: "dns.flags.response")?.value?.localizedCaseInsensitiveContains("response") == true)
+        #expect(findNode(in: dnsNode.children, fieldName: "dns.count.queries")?.value == "1")
+        #expect(findNode(in: dnsNode.children, fieldName: "dns.count.answers")?.value == "1")
+        #expect(findNode(in: dnsNode.children, fieldName: "dns.qry.name")?.value == "www.example.com")
+        #expect(findNode(in: dnsNode.children, fieldName: "dns.qry.type")?.value?.contains("A") == true)
+        #expect(findNode(in: dnsNode.children, fieldName: "dns.resp.name")?.value == "www.example.com")
+        #expect(findNode(in: dnsNode.children, fieldName: "dns.a")?.value == "93.184.216.34")
+        #expect(findNode(in: dnsNode.children, fieldName: "dns.a")?.byteRange == PacketByteRange(offset: 87, length: 4))
+    }
+
+    @Test func completeLengthPrefixedDNSOverTCPProducesResolutionObservation() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let dnsPayload = makeDNSResponsePayload()
+        var tcpPayload: [UInt8] = []
+        tcpPayload.appendBigEndian(UInt16(dnsPayload.count))
+        tcpPayload.append(contentsOf: dnsPayload)
+        let captureURL = directory.appendingPathComponent("dns-over-tcp.pcap")
+        try writePCAP(to: captureURL, packets: [makeIPv4TCPPacket(
+            sourcePort: 53,
+            destinationPort: 54_321,
+            identification: 0x1239,
+            payload: tcpPayload
+        )])
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let packets = try await document.open()
+        let packet = try #require(packets.first)
+
+        #expect(packet.transportHint == .dns)
+        #expect(packet.dnsResolutions?.first?.domainName == "www.example.com")
+        #expect(packet.dnsResolutions?.first?.ipAddress == "93.184.216.34")
+    }
+
+    @Test func splitLengthPrefixedDNSOverTCPProducesResolutionOnCompletingPacket() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let dnsPayload = makeDNSResponsePayload()
+        var framedPayload: [UInt8] = []
+        framedPayload.appendBigEndian(UInt16(dnsPayload.count))
+        framedPayload.append(contentsOf: dnsPayload)
+        let splitIndex = framedPayload.count / 2
+        let firstPayload = Array(framedPayload[..<splitIndex])
+        let secondPayload = Array(framedPayload[splitIndex...])
+        let captureURL = directory.appendingPathComponent("split-dns-over-tcp.pcap")
+        try writePCAP(to: captureURL, packets: [
+            makeIPv4TCPPacket(
+                sourcePort: 53,
+                destinationPort: 54_321,
+                identification: 0x1243,
+                sequenceNumber: 10,
+                payload: firstPayload
+            ),
+            makeIPv4TCPPacket(
+                sourcePort: 53,
+                destinationPort: 54_321,
+                identification: 0x1244,
+                sequenceNumber: UInt32(10 + firstPayload.count),
+                payload: secondPayload
+            ),
+        ])
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let packets = try await document.open()
+
+        #expect(packets.count == 2)
+        #expect(packets[0].dnsResolutions == nil)
+        #expect(packets[1].dnsResolutions == [DNSResolutionObservation(
+            domainName: "www.example.com",
+            ipAddress: "93.184.216.34",
+            timeToLive: 60
+        )])
+    }
+
+    @Test func encryptedDNSPortsDoNotParseLengthPrefixedBytesAsPlainDNS() {
+        let dnsPayload = makeDNSResponsePayload()
+        var encryptedCarrierPayload: [UInt8] = []
+        encryptedCarrierPayload.appendBigEndian(UInt16(dnsPayload.count))
+        encryptedCarrierPayload.append(contentsOf: dnsPayload)
+        let rawBytes = makeIPv4TCPPacket(
+            sourcePort: 853,
+            destinationPort: 54_321,
+            identification: 0x1242,
+            payload: encryptedCarrierPayload
+        )
+        let packet = PacketAnalyzer(record: NativePacketRecord(
+            identifier: 1,
+            packetNumber: 1,
+            timestamp: Date(timeIntervalSince1970: 0),
+            rawBytes: rawBytes,
+            originalLength: rawBytes.count,
+            linkLayerType: Libpcap.dltEthernet,
+            interfaceIdentifier: nil,
+            interfaceName: nil,
+            packetComment: nil
+        )).analyze()
+
+        #expect(packet.transportHint != .dns)
+        #expect(packet.dnsResolutions.isEmpty)
+    }
+
+    @Test func phaseTwoInspectionUsesWiresharkPayloadDetailsForUnestablishedStreams() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("phase-two-app-protocols.pcap")
+        try writePCAP(
+            to: captureURL,
+            packets: [
+                makeIPv4HTTPRequestPacket(),
+                makeIPv4WebSocketTextFramePacket(),
+            ]
+        )
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let packets = try await document.open()
+        #expect(packets.count == 2)
+        #expect(packets[0].transportHint == .http1)
+        #expect(packets[1].transportHint == .websocket)
+
+        let httpInspection = try await document.inspectPacket(id: packets[0].id)
+        let httpPayload = try #require(findNode(in: httpInspection.detailNodes, fieldName: "tcp.payload"))
+        #expect(httpPayload.byteRange?.offset == 54)
+        #expect(httpPayload.rawValue?.hasPrefix("47 45 54") == true)
+        #expect(findNode(in: httpInspection.detailNodes, fieldName: "wireshark.fallback") == nil)
+
+        let websocketInspection = try await document.inspectPacket(id: packets[1].id)
+        #expect(packets[1].layers.contains { $0.name == "WebSocket" })
+        let websocketPayload = try #require(findNode(in: websocketInspection.detailNodes, fieldName: "tcp.payload"))
+        #expect(websocketPayload.byteRange == PacketByteRange(offset: 54, length: 11))
+        #expect(websocketPayload.rawValue?.hasPrefix("81 85 01 02 03 04") == true)
+        #expect(findNode(in: websocketInspection.detailNodes, fieldName: "wireshark.fallback") == nil)
+    }
+
+    @Test func incrementalOpenEmitsAppendBatchesAndCompletedProgress() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("incremental-complete.pcap")
+        let repeatedPacket = makeIPv4UDPPayloadPacket()
+        let packetCount = 640
+        try writePCAP(to: captureURL, repeating: repeatedPacket, count: packetCount)
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let probe = LoadEventProbe()
+        let events = document.events()
+        let collector = Task {
+            do {
+                for try await event in events {
+                    await probe.record(event)
+                }
+            } catch is CancellationError {
+            } catch {
+            }
+        }
+        defer { collector.cancel() }
+
+        let packets = try await document.open()
+        let progress = await document.loadProgress()
+        let snapshot = await probe.current()
+
+        #expect(packets.count == packetCount)
+        #expect(progress.phase == .completed)
+        #expect(progress.loadedPacketCount == packetCount)
+        #expect(progress.fractionCompleted == .some(1.0))
+        #expect(snapshot.replaceBatchCount == 1)
+        #expect(snapshot.appendBatchCount >= 5)
+        #expect(snapshot.appendedPacketCount == packetCount)
+        #expect(snapshot.progressPhases.contains(.loading))
+        #expect(snapshot.progressPhases.last == .completed)
+    }
+
+    @Test func incrementalOpenAllowsEarlyInspectionAndCancellation() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let captureURL = directory.appendingPathComponent("incremental-cancel.pcap")
+        let repeatedPacket = makeIPv4UDPPayloadPacket()
+        let totalPacketCount = 20_000
+        try writePCAP(to: captureURL, repeating: repeatedPacket, count: totalPacketCount)
+
+        let document = try await NativeTCPViewerCore().openOfflineCaptureDocument(at: captureURL)
+        let probe = LoadEventProbe()
+        let events = document.events()
+        let collector = Task {
+            do {
+                for try await event in events {
+                    await probe.record(event)
+                }
+            } catch is CancellationError {
+            } catch {
+            }
+        }
+        defer { collector.cancel() }
+
+        let openTask = Task {
+            try await document.open()
+        }
+
+        let observedLoading = await waitUntil(timeout: .seconds(5)) {
+            let packets = await document.packetSummaries()
+            let progress = await document.loadProgress()
+            return packets.count >= 128 && progress.phase == .loading
+        }
+        #expect(observedLoading)
+
+        let earlyPackets = await document.packetSummaries()
+        let firstPacket = try #require(earlyPackets.first)
+        let inspection = try await document.inspectPacket(id: firstPacket.id)
+        #expect(!inspection.rawBytes.isEmpty)
+        #expect(findNode(in: inspection.detailNodes, fieldName: "udp") != nil)
+
+        await document.cancelLoading()
+
+        do {
+            _ = try await openTask.value
+            Issue.record("Expected loading cancellation to throw TCPViewerCoreError.operationCancelled.")
+        } catch let error as TCPViewerCoreError {
+            #expect(error.code == .operationCancelled)
+        }
+
+        let retainedPackets = await document.packetSummaries()
+        let progress = await document.loadProgress()
+        let snapshot = await probe.current()
+
+        #expect(!retainedPackets.isEmpty)
+        #expect(retainedPackets.count < totalPacketCount)
+        #expect(progress.phase == .cancelled)
+        #expect(progress.isPartialResult)
+        #expect(snapshot.appendBatchCount >= 1)
+        #expect(snapshot.progressPhases.contains(.cancelled))
+
+        do {
+            try await document.save()
+            Issue.record("Expected save() to fail for a partially loaded capture.")
+        } catch let error as TCPViewerCoreError {
+            #expect(error.code == .offlineFileSaveFailed)
+        }
+    }
+
+    #if DEBUG
+    @Test func livePacketDiskStoreAppendsInspectsAndCleansUpLargeCounts() throws {
+        let harness = NativeLivePacketDiskStoreTestHarness()
+        let packet = makeIPv4UDPPayloadPacket()
+        let checkpoints = [10_000, 50_000, 100_000]
+        let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+        var lastCheckpoint = 0
+
+        for checkpoint in checkpoints {
+            for packetNumber in (lastCheckpoint + 1)...checkpoint {
+                try harness.appendPacket(
+                    identifier: UInt64(packetNumber),
+                    rawBytes: packet,
+                    timestamp: timestamp.addingTimeInterval(TimeInterval(packetNumber))
+                )
+            }
+
+            let snapshot = harness.snapshot
+            #expect(snapshot.packetCount == checkpoint)
+            #expect(!snapshot.backingFileExists)
+            #expect(snapshot.backingFileSize == UInt64(packet.count * checkpoint))
+            #expect(try harness.offset(identifier: 1) == 0)
+            #expect(try harness.offset(identifier: UInt64(checkpoint)) == UInt64(packet.count * (checkpoint - 1)))
+            lastCheckpoint = checkpoint
+        }
+
+        for identifier in [UInt64(1), 50_000, 100_000] {
+            let inspection = try harness.inspectPacket(identifier: identifier)
+            #expect(inspection.packetID == identifier)
+            #expect(inspection.rawBytes == packet)
+            #expect(findNode(in: inspection.detailNodes, fieldName: "udp") != nil)
+        }
+
+        do {
+            _ = try harness.inspectPacket(identifier: 100_001)
+            Issue.record("Expected a missing packet identifier to fail.")
+        } catch {
+            #expect(String(describing: error).contains("backing store"))
+        }
+
+        let backingFilePath = harness.snapshot.backingFilePath
+        #expect(!FileManager.default.fileExists(atPath: backingFilePath))
+
+        harness.cleanup()
+
+        #expect(!FileManager.default.fileExists(atPath: backingFilePath))
+        #expect(harness.snapshot.packetCount == 0)
+        #expect(!harness.snapshot.backingFileExists)
+    }
+
+    @Test func livePacketDiskStoreUnitAppendsAtEOFAfterInspectionReads() throws {
+        let harness = NativeLivePacketDiskStoreTestHarness()
+        let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let firstPacket = makeIPv4UDPPayloadPacket()
+        var secondPacket = makePaddedPacket(base: makeIPv4UDPPayloadPacket(), byteCount: 64)
+        secondPacket[secondPacket.count - 1] = 0x22
+        var thirdPacket = makePaddedPacket(base: makeIPv4UDPPayloadPacket(), byteCount: 96)
+        thirdPacket[thirdPacket.count - 1] = 0x33
+
+        try harness.appendPacket(identifier: 1, rawBytes: firstPacket, timestamp: timestamp)
+        try harness.appendPacket(identifier: 2, rawBytes: secondPacket, timestamp: timestamp.addingTimeInterval(1))
+
+        let firstInspection = try harness.inspectPacket(identifier: 1)
+        #expect(firstInspection.rawBytes == firstPacket)
+
+        try harness.appendPacket(identifier: 3, rawBytes: thirdPacket, timestamp: timestamp.addingTimeInterval(2))
+
+        #expect(try harness.offset(identifier: 1) == 0)
+        #expect(try harness.offset(identifier: 2) == UInt64(firstPacket.count))
+        #expect(try harness.offset(identifier: 3) == UInt64(firstPacket.count + secondPacket.count))
+        #expect(harness.snapshot.backingFileSize == UInt64(firstPacket.count + secondPacket.count + thirdPacket.count))
+        #expect(!FileManager.default.fileExists(atPath: harness.snapshot.backingFilePath))
+        #expect(try harness.inspectPacket(identifier: 2).rawBytes == secondPacket)
+        #expect(try harness.inspectPacket(identifier: 3).rawBytes == thirdPacket)
+
+        harness.cleanup()
+    }
+
+    @Test func livePacketReanalysisIntegrationDoesNotCorruptLaterPacketSummaries() throws {
+        let harness = NativeLivePacketDiskStoreTestHarness()
+        let timestamp = Date(timeIntervalSince1970: 1_700_200_000)
+        let firstPacket = makeIPv4UDPPayloadPacket()
+        var secondPacket = makePaddedPacket(base: makeIPv4UDPPayloadPacket(), byteCount: 94)
+        secondPacket[secondPacket.count - 1] = 0x22
+        let thirdPacket = makeUnknownEtherTypePacket(etherType: 0xb681, byteCount: 66)
+
+        try harness.appendPacket(identifier: 1, rawBytes: firstPacket, timestamp: timestamp)
+        try harness.appendPacket(identifier: 2, rawBytes: secondPacket, timestamp: timestamp.addingTimeInterval(1))
+
+        let staleReanalysis = try harness.reanalyzePacketSummaries(upTo: 1)
+        #expect(staleReanalysis.count == 1)
+        #expect(staleReanalysis.first?.layers.map(\.name).contains("UDP") == true)
+
+        try harness.appendPacket(identifier: 3, rawBytes: thirdPacket, timestamp: timestamp.addingTimeInterval(2))
+
+        let summaries = try harness.reanalyzePacketSummaries(upTo: 2)
+        let secondSummary = try #require(summaries.last)
+        #expect(secondSummary.id == 2)
+        #expect(secondSummary.layers.map(\.name).contains("UDP"))
+        #expect(secondSummary.infoSummary != "Ethernet II")
+        if let protocolSummary = secondSummary.protocolSummary {
+            #expect(!isHexEtherTypeProtocol(protocolSummary))
+        }
+
+        #expect(try harness.offset(identifier: 1) == 0)
+        #expect(try harness.offset(identifier: 2) == UInt64(firstPacket.count))
+        #expect(try harness.offset(identifier: 3) == UInt64(firstPacket.count + secondPacket.count))
+        #expect(try harness.inspectPacket(identifier: 2).rawBytes == secondPacket)
+        #expect(try harness.inspectPacket(identifier: 3).rawBytes == thirdPacket)
+
+        harness.cleanup()
+    }
+
+    @Test func livePacketReanalysisSummariesRemainValidAfterNativeStoreCleanup() throws {
+        let harness = NativeLivePacketDiskStoreTestHarness()
+        defer { harness.cleanup() }
+
+        let packet = makeIPv4UDPPayloadPacket()
+        let timestamp = Date(timeIntervalSince1970: 1_700_300_000)
+        for packetNumber in 1...3 {
+            try harness.appendPacket(
+                identifier: UInt64(packetNumber),
+                rawBytes: packet,
+                timestamp: timestamp.addingTimeInterval(TimeInterval(packetNumber))
+            )
+        }
+
+        let summaries = try harness.reanalyzePacketSummaries()
+        let backingFilePath = harness.snapshot.backingFilePath
+
+        harness.cleanup()
+
+        #expect(!FileManager.default.fileExists(atPath: backingFilePath))
+
+        // Force value copies after native descriptors and their packet store are gone.
+        let copiedSummaries = summaries.map { $0 }
+        let summarySet = Set(copiedSummaries)
+
+        #expect(copiedSummaries.map(\.id) == [1, 2, 3])
+        #expect(summarySet.count == 3)
+        #expect(copiedSummaries.allSatisfy { $0.source == .live })
+        #expect(copiedSummaries.allSatisfy { $0.endpoints.source.address == "192.168.0.1" })
+        #expect(copiedSummaries.allSatisfy { $0.endpoints.destination.address == "192.168.0.2" })
+        #expect(copiedSummaries.allSatisfy { $0.layers.map(\.name).contains("UDP") })
+        #expect(copiedSummaries.allSatisfy { !$0.infoSummary.isEmpty })
+    }
+
+    @Test func livePacketReanalysisUpdatesReturnStableTextAfterStoreReads() throws {
+        let harness = NativeLivePacketDiskStoreTestHarness()
+        defer { harness.cleanup() }
+
+        let timestamp = Date(timeIntervalSince1970: 1_700_400_000)
+        let firstPacket = makeIPv4UDPPayloadPacket()
+        var secondPacket = makePaddedPacket(base: makeIPv4UDPPayloadPacket(), byteCount: 94)
+        secondPacket[secondPacket.count - 1] = 0x44
+
+        try harness.appendPacket(identifier: 1, rawBytes: firstPacket, timestamp: timestamp)
+        try harness.appendPacket(identifier: 2, rawBytes: secondPacket, timestamp: timestamp.addingTimeInterval(1))
+
+        let firstInspection = try harness.inspectPacket(identifier: 1)
+        #expect(firstInspection.rawBytes == firstPacket)
+
+        let updates = try harness.reanalyzePacketSummaryUpdates(upTo: 2)
+        let copiedUpdates = updates.map { $0 }
+
+        #expect(copiedUpdates.map(\.packetID) == [1, 2])
+        #expect(copiedUpdates.allSatisfy { !$0.infoSummary.isEmpty })
+        #expect(copiedUpdates.last?.infoSummary != "Ethernet II")
+        if let protocolSummary = copiedUpdates.last?.protocolSummary {
+            #expect(!isHexEtherTypeProtocol(protocolSummary))
+        }
+    }
+
+    @Test func livePacketDiskStoreRSSStressIsGated() throws {
+        guard ProcessInfo.processInfo.environment["TCPVIEWER_RUN_MEMORY_STRESS"] == "1" else {
+            return
+        }
+
+        let harness = NativeLivePacketDiskStoreTestHarness()
+        let packet = makePaddedPacket(base: makeIPv4UDPPayloadPacket(), byteCount: 2_048)
+        let timestamp = Date(timeIntervalSince1970: 1_700_100_000)
+        var samples: [(String, UInt64)] = [("before", residentMemoryBytes())]
+        var appended = 0
+
+        for checkpoint in [10_000, 50_000, 100_000] {
+            for packetNumber in (appended + 1)...checkpoint {
+                try harness.appendPacket(
+                    identifier: UInt64(packetNumber),
+                    rawBytes: packet,
+                    timestamp: timestamp.addingTimeInterval(TimeInterval(packetNumber))
+                )
+            }
+
+            appended = checkpoint
+            samples.append(("after \(checkpoint)", residentMemoryBytes()))
+        }
+
+        for identifier in [UInt64(1), 50_000, 100_000] {
+            let inspection = try harness.inspectPacket(identifier: identifier)
+            #expect(inspection.rawBytes.count == packet.count)
+        }
+        samples.append(("after inspections", residentMemoryBytes()))
+
+        let beforeCleanupPath = harness.snapshot.backingFilePath
+        harness.cleanup()
+        samples.append(("after cleanup", residentMemoryBytes()))
+
+        let capturedBytes = UInt64(packet.count * 100_000)
+        let growthAt100K = samples[3].1 > samples[0].1 ? samples[3].1 - samples[0].1 : 0
+        let growthAfterInspections = samples[4].1 > samples[0].1 ? samples[4].1 - samples[0].1 : 0
+        logMemorySamples(samples)
+
+        #expect(!FileManager.default.fileExists(atPath: beforeCleanupPath))
+        #expect(growthAt100K < 96 * 1_024 * 1_024)
+        #expect(growthAfterInspections < 112 * 1_024 * 1_024)
+        #expect(growthAt100K < capturedBytes / 2)
+    }
+    #endif
+}
+
+private struct LoadEventSnapshot: Sendable {
+    var replaceBatchCount = 0
+    var appendBatchCount = 0
+    var appendedPacketCount = 0
+    var progressPhases: [PacketLoadProgress.Phase] = []
+}
+
+private actor LoadEventProbe {
+    private var state = LoadEventSnapshot()
+
+    func record(_ event: PacketIngestEvent) {
+        switch event {
+        case .packetBatch(let packets, let disposition):
+            switch disposition {
+            case .replace:
+                state.replaceBatchCount += 1
+            case .append:
+                state.appendBatchCount += 1
+                state.appendedPacketCount += packets.count
+            @unknown default:
+                break
+            }
+        case .loadProgressChanged(let progress):
+            state.progressPhases.append(progress.phase)
+        case .liveStateChanged, .documentStateChanged, .healthChanged, .documentMetadataChanged, .packetSummaryUpdates:
+            break
+        }
+    }
+
+    func current() -> LoadEventSnapshot {
+        state
+    }
+}
+
+private func bundledCaptureFixtureURL(fileName: String, fileID: String = #fileID, line: Int = #line) throws -> URL {
+    // SwiftPM portability: upstream resolved fixtures via Bundle(for:) inside an
+    // Xcode test bundle; SwiftPM test resources live in Bundle.module.
+    let bundle = Bundle.module
+    let fixtureURL = URL(fileURLWithPath: fileName)
+    let resourceName = fixtureURL.deletingPathExtension().lastPathComponent
+    let fileExtension = fixtureURL.pathExtension
+
+    if let url = bundle.url(forResource: resourceName, withExtension: fileExtension, subdirectory: "Fixtures/CaptureFiles") {
+        return url
+    }
+
+    if let url = bundle.url(forResource: resourceName, withExtension: fileExtension) {
+        return url
+    }
+
+    throw TestSupportError(message: "Missing bundled capture fixture \(fileName).", fileID: fileID, line: line)
+}
+
+private func waitUntil(
+    timeout: Duration,
+    pollInterval: Duration = .milliseconds(10),
+    condition: @escaping @Sendable () async -> Bool
+) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now + timeout
+
+    while clock.now < deadline {
+        if await condition() {
+            return true
+        }
+
+        try? await Task.sleep(for: pollInterval)
+    }
+
+    return false
+}
+
+private func makeTemporaryDirectory() throws -> URL {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    return directory
+}
+
+private func writePCAP(to url: URL, packets: [Data]) throws {
+    var data = Data()
+    data.appendLittleEndian(UInt32(0xa1b2c3d4))
+    data.appendLittleEndian(UInt16(2))
+    data.appendLittleEndian(UInt16(4))
+    data.appendLittleEndian(Int32(0))
+    data.appendLittleEndian(UInt32(0))
+    data.appendLittleEndian(UInt32(65_535))
+    data.appendLittleEndian(UInt32(1))
+
+    for (index, packet) in packets.enumerated() {
+        try appendPacketRecord(packet, index: index, to: &data)
+    }
+
+    try data.write(to: url)
+}
+
+private func writePCAP(to url: URL, repeating packet: Data, count: Int) throws {
+    var data = Data()
+    data.appendLittleEndian(UInt32(0xa1b2c3d4))
+    data.appendLittleEndian(UInt16(2))
+    data.appendLittleEndian(UInt16(4))
+    data.appendLittleEndian(Int32(0))
+    data.appendLittleEndian(UInt32(0))
+    data.appendLittleEndian(UInt32(65_535))
+    data.appendLittleEndian(UInt32(1))
+
+    data.reserveCapacity(24 + (16 + packet.count) * count)
+    for index in 0..<count {
+        try appendPacketRecord(packet, index: index, to: &data)
+    }
+
+    try data.write(to: url)
+}
+
+private func writePCAPNG(to url: URL, interfaces: [String], packets: [(packet: Data, interfaceID: UInt32)]) throws {
+    var data = Data()
+
+    var sectionBody = Data()
+    sectionBody.appendLittleEndian(UInt32(0x1a2b3c4d))
+    sectionBody.appendLittleEndian(UInt16(1))
+    sectionBody.appendLittleEndian(UInt16(0))
+    sectionBody.appendLittleEndian(UInt64.max)
+    appendPCAPNGBlock(type: 0x0a0d0d0a, body: sectionBody, to: &data)
+
+    for interfaceName in interfaces {
+        var interfaceBody = Data()
+        interfaceBody.appendLittleEndian(UInt16(1))
+        interfaceBody.appendLittleEndian(UInt16(0))
+        interfaceBody.appendLittleEndian(UInt32(65_535))
+        appendPCAPNGStringOption(code: 2, value: interfaceName, to: &interfaceBody)
+        interfaceBody.appendLittleEndian(UInt16(0))
+        interfaceBody.appendLittleEndian(UInt16(0))
+        appendPCAPNGBlock(type: 1, body: interfaceBody, to: &data)
+    }
+
+    for (index, entry) in packets.enumerated() {
+        try appendPCAPNGEnhancedPacket(entry.packet, interfaceID: entry.interfaceID, index: index, to: &data)
+    }
+
+    try data.write(to: url)
+}
+
+private func writeBigEndianPCAPNG(to url: URL, packets: [Data]) throws {
+    var data = Data()
+
+    var sectionBody = Data()
+    sectionBody.appendBigEndian(UInt32(0x1a2b3c4d))
+    sectionBody.appendBigEndian(UInt16(1))
+    sectionBody.appendBigEndian(UInt16(0))
+    sectionBody.appendBigEndian(UInt64.max)
+    appendBigEndianPCAPNGBlock(type: 0x0a0d0d0a, body: sectionBody, to: &data)
+
+    var interfaceBody = Data()
+    interfaceBody.appendBigEndian(UInt16(1))
+    interfaceBody.appendBigEndian(UInt16(0))
+    interfaceBody.appendBigEndian(UInt32(65_535))
+    interfaceBody.appendBigEndian(UInt16(0))
+    interfaceBody.appendBigEndian(UInt16(0))
+    appendBigEndianPCAPNGBlock(type: 1, body: interfaceBody, to: &data)
+
+    for (index, packet) in packets.enumerated() {
+        try appendBigEndianPCAPNGEnhancedPacket(packet, index: index, to: &data)
+    }
+
+    try data.write(to: url)
+}
+
+private func writePCAPNGWithMalformedPacketBetweenValidPackets(to url: URL) throws {
+    var data = Data()
+
+    var sectionBody = Data()
+    sectionBody.appendLittleEndian(UInt32(0x1a2b3c4d))
+    sectionBody.appendLittleEndian(UInt16(1))
+    sectionBody.appendLittleEndian(UInt16(0))
+    sectionBody.appendLittleEndian(UInt64.max)
+    appendPCAPNGBlock(type: 0x0a0d0d0a, body: sectionBody, to: &data)
+
+    var interfaceBody = Data()
+    interfaceBody.appendLittleEndian(UInt16(1))
+    interfaceBody.appendLittleEndian(UInt16(0))
+    interfaceBody.appendLittleEndian(UInt32(65_535))
+    interfaceBody.appendLittleEndian(UInt16(0))
+    interfaceBody.appendLittleEndian(UInt16(0))
+    appendPCAPNGBlock(type: 1, body: interfaceBody, to: &data)
+
+    try appendPCAPNGEnhancedPacket(makeIPv4UDPPayloadPacket(), interfaceID: 0, index: 0, to: &data)
+
+    var malformedPacketBody = Data()
+    malformedPacketBody.appendLittleEndian(UInt32(0))
+    appendPCAPNGBlock(type: 6, body: malformedPacketBody, to: &data)
+
+    try appendPCAPNGEnhancedPacket(makeIPv4DNSResponsePacket(), interfaceID: 0, index: 1, to: &data)
+    try data.write(to: url)
+}
+
+private func appendPCAPNGEnhancedPacket(_ packet: Data, interfaceID: UInt32, index: Int, to data: inout Data) throws {
+    let packetLength = try UInt32(exactly: packet.count).unwrap()
+    let timestamp = UInt64(1_700_000_000 + index) * 1_000_000
+    var packetBody = Data()
+    packetBody.appendLittleEndian(interfaceID)
+    packetBody.appendLittleEndian(UInt32(timestamp >> 32))
+    packetBody.appendLittleEndian(UInt32(timestamp & 0xffff_ffff))
+    packetBody.appendLittleEndian(packetLength)
+    packetBody.appendLittleEndian(packetLength)
+    packetBody.append(packet)
+    packetBody.appendPCAPNGPadding(for: packet.count)
+    packetBody.appendLittleEndian(UInt16(0))
+    packetBody.appendLittleEndian(UInt16(0))
+    appendPCAPNGBlock(type: 6, body: packetBody, to: &data)
+}
+
+private func appendBigEndianPCAPNGEnhancedPacket(_ packet: Data, index: Int, to data: inout Data) throws {
+    let packetLength = try UInt32(exactly: packet.count).unwrap()
+    let timestamp = UInt64(1_700_000_000 + index) * 1_000_000
+    var packetBody = Data()
+    packetBody.appendBigEndian(UInt32(0))
+    packetBody.appendBigEndian(UInt32(timestamp >> 32))
+    packetBody.appendBigEndian(UInt32(timestamp & 0xffff_ffff))
+    packetBody.appendBigEndian(packetLength)
+    packetBody.appendBigEndian(packetLength)
+    packetBody.append(packet)
+    packetBody.appendPCAPNGPadding(for: packet.count)
+    packetBody.appendBigEndian(UInt16(0))
+    packetBody.appendBigEndian(UInt16(0))
+    appendBigEndianPCAPNGBlock(type: 6, body: packetBody, to: &data)
+}
+
+private func appendPCAPNGBlock(type: UInt32, body: Data, to data: inout Data) {
+    let totalLength = UInt32(12 + body.count)
+    data.appendLittleEndian(type)
+    data.appendLittleEndian(totalLength)
+    data.append(body)
+    data.appendLittleEndian(totalLength)
+}
+
+private func appendBigEndianPCAPNGBlock(type: UInt32, body: Data, to data: inout Data) {
+    let totalLength = UInt32(12 + body.count)
+    data.appendBigEndian(type)
+    data.appendBigEndian(totalLength)
+    data.append(body)
+    data.appendBigEndian(totalLength)
+}
+
+private func appendPCAPNGStringOption(code: UInt16, value: String, to data: inout Data) {
+    let bytes = Array(value.utf8)
+    data.appendLittleEndian(code)
+    data.appendLittleEndian(UInt16(bytes.count))
+    data.append(contentsOf: bytes)
+    data.appendPCAPNGPadding(for: bytes.count)
+}
+
+private func appendPacketRecord(_ packet: Data, index: Int, to data: inout Data) throws {
+    let timestamp = UInt32(1_700_000_000 + index)
+    let microseconds = UInt32((index % 1_000) * 1_000)
+    let capturedLength = try UInt32(exactly: packet.count).unwrap()
+
+    data.appendLittleEndian(timestamp)
+    data.appendLittleEndian(microseconds)
+    data.appendLittleEndian(capturedLength)
+    data.appendLittleEndian(capturedLength)
+    data.append(packet)
+}
+
+private func makeARPRequestPacket() -> Data {
+    Data([
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+        0x08, 0x06,
+        0x00, 0x01,
+        0x08, 0x00,
+        0x06,
+        0x04,
+        0x00, 0x01,
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+        0xc0, 0xa8, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xc0, 0xa8, 0x00, 0x02,
+    ])
+}
+
+private func makeIPv4TCPPayloadPacket() -> Data {
+    Data([
+        0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+        0x08, 0x00,
+        0x45, 0x00, 0x00, 0x2c, 0x12, 0x34, 0x40, 0x00, 0x40, 0x06, 0x00, 0x00,
+        0xc0, 0xa8, 0x00, 0x01,
+        0xc0, 0xa8, 0x00, 0x02,
+        0x04, 0xd2, 0x10, 0xe1,
+        0x00, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00,
+        0x50, 0x18, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xde, 0xad, 0xbe, 0xef,
+    ])
+}
+
+private func makeIPv4TLSApplicationDataPacket(recordVersion: UInt16) -> Data {
+    let encryptedPayload: [UInt8] = [0xde, 0xad, 0xbe, 0xef]
+    let tlsRecordLength = 5 + encryptedPayload.count
+    let ipv4TotalLength = UInt16(20 + 20 + tlsRecordLength)
+    var packet = Data([
+        0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+        0x08, 0x00,
+        0x45, 0x00,
+    ])
+    packet.appendBigEndian(ipv4TotalLength)
+    packet.append(contentsOf: [
+        0x12, 0x37, 0x40, 0x00, 0x40, 0x06, 0x00, 0x00,
+        0xc0, 0xa8, 0x00, 0x01,
+        0xc0, 0xa8, 0x00, 0x02,
+    ])
+    packet.appendBigEndian(UInt16(54_321))
+    packet.appendBigEndian(UInt16(443))
+    packet.append(contentsOf: [
+        0x00, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x01,
+        0x50, 0x18, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x17,
+    ])
+    packet.appendBigEndian(recordVersion)
+    packet.appendBigEndian(UInt16(encryptedPayload.count))
+    packet.append(contentsOf: encryptedPayload)
+    return packet
+}
+
+private func makeIPv4TLSClientHelloPacket(hostName: String) -> Data {
+    makeIPv4TCPPacket(
+        sourcePort: 54_321,
+        destinationPort: 443,
+        identification: 0x1239,
+        payload: makeTLSClientHelloRecord(hostName: hostName)
+    )
+}
+
+private func makeIPv4TLSServerHelloPacket() -> Data {
+    makeIPv4TCPPacket(
+        sourcePort: 443,
+        destinationPort: 54_321,
+        identification: 0x123a,
+        sourceIPv4: [0xc0, 0xa8, 0x00, 0x02],
+        destinationIPv4: [0xc0, 0xa8, 0x00, 0x01],
+        payload: makeTLSServerHelloRecord()
+    )
+}
+
+private func makeIPv4TLSSplitClientHelloPackets(hostName: String) -> [Data] {
+    let clientHello = makeTLSClientHelloRecord(hostName: hostName)
+    let splitIndex = max(10, clientHello.count / 2)
+    let firstPayload = Array(clientHello[..<splitIndex])
+    let secondPayload = Array(clientHello[splitIndex...])
+
+    // The second packet continues the first packet's TCP sequence so Wireshark can reassemble the ClientHello.
+    return [
+        makeIPv4TCPPacket(
+            sourcePort: 54_321,
+            destinationPort: 443,
+            identification: 0x123b,
+            sequenceNumber: 1,
+            payload: firstPayload
+        ),
+        makeIPv4TCPPacket(
+            sourcePort: 54_321,
+            destinationPort: 443,
+            identification: 0x123c,
+            sequenceNumber: UInt32(1 + firstPayload.count),
+            payload: secondPayload
+        ),
+    ]
+}
+
+private func makeTLSClientHelloRecord(hostName: String) -> [UInt8] {
+    let hostBytes = Array(hostName.utf8)
+    var serverNameExtension: [UInt8] = []
+    serverNameExtension.appendBigEndian(UInt16(0))
+    serverNameExtension.appendBigEndian(UInt16(5 + hostBytes.count))
+    serverNameExtension.appendBigEndian(UInt16(3 + hostBytes.count))
+    serverNameExtension.append(0)
+    serverNameExtension.appendBigEndian(UInt16(hostBytes.count))
+    serverNameExtension.append(contentsOf: hostBytes)
+
+    var supportedVersionsExtension: [UInt8] = []
+    supportedVersionsExtension.appendBigEndian(UInt16(43))
+    supportedVersionsExtension.appendBigEndian(UInt16(5))
+    supportedVersionsExtension.append(4)
+    supportedVersionsExtension.appendBigEndian(UInt16(0x0304))
+    supportedVersionsExtension.appendBigEndian(UInt16(0x0303))
+
+    let extensions = serverNameExtension + supportedVersionsExtension
+    var body: [UInt8] = []
+    body.appendBigEndian(UInt16(0x0303))
+    body.append(contentsOf: Array(repeating: 0x11, count: 32))
+    body.append(0)
+    body.appendBigEndian(UInt16(2))
+    body.appendBigEndian(UInt16(0x1301))
+    body.append(1)
+    body.append(0)
+    body.appendBigEndian(UInt16(extensions.count))
+    body.append(contentsOf: extensions)
+
+    return makeTLSRecord(contentType: 22, recordVersion: 0x0303, handshakeType: 1, body: body)
+}
+
+private func makeTLSServerHelloRecord() -> [UInt8] {
+    var supportedVersionsExtension: [UInt8] = []
+    supportedVersionsExtension.appendBigEndian(UInt16(43))
+    supportedVersionsExtension.appendBigEndian(UInt16(2))
+    supportedVersionsExtension.appendBigEndian(UInt16(0x0304))
+
+    var body: [UInt8] = []
+    body.appendBigEndian(UInt16(0x0303))
+    body.append(contentsOf: Array(repeating: 0x22, count: 32))
+    body.append(0)
+    body.appendBigEndian(UInt16(0x1301))
+    body.append(0)
+    body.appendBigEndian(UInt16(supportedVersionsExtension.count))
+    body.append(contentsOf: supportedVersionsExtension)
+
+    return makeTLSRecord(contentType: 22, recordVersion: 0x0303, handshakeType: 2, body: body)
+}
+
+private func makeTLSRecord(contentType: UInt8, recordVersion: UInt16, handshakeType: UInt8, body: [UInt8]) -> [UInt8] {
+    var handshake: [UInt8] = [handshakeType]
+    handshake.appendUInt24BigEndian(body.count)
+    handshake.append(contentsOf: body)
+
+    var record: [UInt8] = [contentType]
+    record.appendBigEndian(recordVersion)
+    record.appendBigEndian(UInt16(handshake.count))
+    record.append(contentsOf: handshake)
+    return record
+}
+
+private func makeIPv4TCPSYNOptionsPacket() -> Data {
+    Data([
+        0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+        0x08, 0x00,
+        0x45, 0x00, 0x00, 0x40, 0x12, 0x36, 0x40, 0x00, 0x40, 0x06, 0x00, 0x00,
+        0xc0, 0xa8, 0x00, 0x01,
+        0xc0, 0xa8, 0x00, 0x02,
+        0xd2, 0x55, 0xf2, 0x7e,
+        0xa9, 0xd4, 0xde, 0x0a,
+        0x00, 0x00, 0x00, 0x00,
+        0xb0, 0xc2, 0xff, 0xff, 0x68, 0xb2, 0x00, 0x00,
+        0x02, 0x04, 0x05, 0xa0,
+        0x01,
+        0x03, 0x03, 0x06,
+        0x01,
+        0x01,
+        0x08, 0x0a, 0x27, 0x88, 0x32, 0x07, 0x00, 0x00, 0x00, 0x00,
+        0x04, 0x02,
+        0x00,
+        0x00,
+    ])
+}
+
+private func makeIPv4UDPPayloadPacket(payload: [UInt8] = [0xca, 0xfe, 0xba, 0xbe]) -> Data {
+    let udpLength = UInt16(8 + payload.count)
+    let ipv4TotalLength = UInt16(20 + Int(udpLength))
+    var packet = Data([
+        0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+        0x08, 0x00,
+        0x45, 0x00,
+    ])
+    packet.appendBigEndian(ipv4TotalLength)
+    packet.append(contentsOf: [
+        0x12, 0x35, 0x40, 0x00, 0x40, 0x11, 0x00, 0x00,
+        0xc0, 0xa8, 0x00, 0x01,
+        0xc0, 0xa8, 0x00, 0x02,
+    ])
+    packet.appendBigEndian(UInt16(4_000))
+    packet.appendBigEndian(UInt16(5_000))
+    packet.appendBigEndian(udpLength)
+    packet.appendBigEndian(UInt16(0))
+    packet.append(contentsOf: payload)
+    return packet
+}
+
+private func makeIPv4DNSResponsePacket() -> Data {
+    let dnsPayload = makeDNSResponsePayload()
+    let udpLength = UInt16(8 + dnsPayload.count)
+    let ipv4TotalLength = UInt16(20 + Int(udpLength))
+    var packet = Data([
+        0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+        0x08, 0x00,
+        0x45, 0x00,
+    ])
+    packet.appendBigEndian(ipv4TotalLength)
+    packet.append(contentsOf: [
+        0x12, 0x38, 0x40, 0x00, 0x40, 0x11, 0x00, 0x00,
+        0xc0, 0xa8, 0x00, 0x02,
+        0xc0, 0xa8, 0x00, 0x01,
+    ])
+    packet.appendBigEndian(UInt16(53))
+    packet.appendBigEndian(UInt16(54_321))
+    packet.appendBigEndian(udpLength)
+    packet.appendBigEndian(UInt16(0))
+    packet.append(contentsOf: dnsPayload)
+    return packet
+}
+
+private func makeDNSResponsePayload() -> [UInt8] {
+    [
+        0x12, 0x34,
+        0x81, 0x80,
+        0x00, 0x01,
+        0x00, 0x01,
+        0x00, 0x00,
+        0x00, 0x00,
+        0x03, 0x77, 0x77, 0x77,
+        0x07, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65,
+        0x03, 0x63, 0x6f, 0x6d,
+        0x00,
+        0x00, 0x01,
+        0x00, 0x01,
+        0xc0, 0x0c,
+        0x00, 0x01,
+        0x00, 0x01,
+        0x00, 0x00, 0x00, 0x3c,
+        0x00, 0x04,
+        0x5d, 0xb8, 0xd8, 0x22,
+    ]
+}
+
+private func makeIPv4HTTPRequestPacket() -> Data {
+    makeIPv4TCPPacket(
+        sourcePort: 54_321,
+        destinationPort: 80,
+        identification: 0x1240,
+        payload: Array("""
+GET /chat HTTP/1.1\r
+Host: example.com\r
+Upgrade: websocket\r
+Connection: Upgrade\r
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r
+\r
+""".utf8)
+    )
+}
+
+private func makeIPv4HTTPConversationPackets() -> [Data] {
+    let request = Array("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n".utf8)
+    return [
+        makeIPv4TCPPacket(
+            sourcePort: 54_321,
+            destinationPort: 80,
+            identification: 0x2240,
+            sequenceNumber: 100,
+            acknowledgementNumber: 0,
+            flags: 0x02,
+            payload: []
+        ),
+        makeIPv4TCPPacket(
+            sourcePort: 80,
+            destinationPort: 54_321,
+            identification: 0x2241,
+            sequenceNumber: 200,
+            acknowledgementNumber: 101,
+            sourceIPv4: [0xc0, 0xa8, 0x00, 0x02],
+            destinationIPv4: [0xc0, 0xa8, 0x00, 0x01],
+            flags: 0x12,
+            payload: []
+        ),
+        makeIPv4TCPPacket(
+            sourcePort: 54_321,
+            destinationPort: 80,
+            identification: 0x2242,
+            sequenceNumber: 101,
+            acknowledgementNumber: 201,
+            flags: 0x18,
+            payload: request
+        ),
+    ]
+}
+
+private func makeIPv4HTTP2RequestPacket() -> Data {
+    var payload = Array("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".utf8)
+    payload.append(contentsOf: [
+        0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x10, 0x01, 0x04, 0x00, 0x00, 0x00, 0x01,
+        0x82, 0x87, 0x84, 0x01, 0x0b,
+    ])
+    payload.append(contentsOf: Array("example.com".utf8))
+    payload.append(contentsOf: [
+        0x00, 0x00, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x68, 0x65, 0x6c, 0x6c, 0x6f,
+    ])
+    return makeIPv4TCPPacket(
+        sourcePort: 54_321,
+        destinationPort: 80,
+        identification: 0x2243,
+        payload: payload
+    )
+}
+
+private func makeIPv4WebSocketTextFramePacket() -> Data {
+    makeIPv4TCPPacket(
+        sourcePort: 54_321,
+        destinationPort: 80,
+        identification: 0x1241,
+        payload: [
+            0x81, 0x85,
+            0x01, 0x02, 0x03, 0x04,
+            0x69, 0x67, 0x6f, 0x68, 0x6e,
+        ]
+    )
+}
+
+private func makeIPv4TCPPacket(
+    sourcePort: UInt16,
+    destinationPort: UInt16,
+    identification: UInt16,
+    sequenceNumber: UInt32 = 1,
+    acknowledgementNumber: UInt32 = 1,
+    sourceIPv4: [UInt8] = [0xc0, 0xa8, 0x00, 0x01],
+    destinationIPv4: [UInt8] = [0xc0, 0xa8, 0x00, 0x02],
+    flags: UInt8 = 0x18,
+    payload: [UInt8]
+) -> Data {
+    let ipv4TotalLength = UInt16(20 + 20 + payload.count)
+    var packet = Data([
+        0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+        0x08, 0x00,
+        0x45, 0x00,
+    ])
+    packet.appendBigEndian(ipv4TotalLength)
+    packet.appendBigEndian(identification)
+    packet.append(contentsOf: [
+        0x40, 0x00, 0x40, 0x06, 0x00, 0x00,
+    ])
+    packet.append(contentsOf: sourceIPv4)
+    packet.append(contentsOf: destinationIPv4)
+    packet.appendBigEndian(sourcePort)
+    packet.appendBigEndian(destinationPort)
+    packet.appendBigEndian(sequenceNumber)
+    packet.appendBigEndian(acknowledgementNumber)
+    packet.append(contentsOf: [
+        0x50, flags, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ])
+    packet.append(contentsOf: payload)
+    return packet
+}
+
+private func makeIPv6UDPPayloadPacket() -> Data {
+    Data([
+        0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+        0x86, 0xdd,
+        0x60, 0x00, 0x00, 0x00,
+        0x00, 0x0c,
+        0x11,
+        0x40,
+        0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        0x04, 0xd2, 0x16, 0x2e, 0x00, 0x0c, 0x00, 0x00,
+        0xaa, 0xbb, 0xcc, 0xdd,
+    ])
+}
+
+private func makeIPv4ICMPEchoRequestPacket() -> Data {
+    Data([
+        0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+        0x08, 0x00,
+        0x45, 0x00, 0x00, 0x20, 0x12, 0x39, 0x40, 0x00, 0x40, 0x01, 0x00, 0x00,
+        0xc0, 0xa8, 0x00, 0x01,
+        0xc0, 0xa8, 0x00, 0x02,
+        0x08, 0x00, 0x00, 0x00,
+        0x12, 0x34,
+        0x00, 0x02,
+        0xaa, 0xbb, 0xcc, 0xdd,
+    ])
+}
+
+private func makeIPv6ICMPEchoRequestPacket() -> Data {
+    Data([
+        0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+        0x86, 0xdd,
+        0x60, 0x00, 0x00, 0x00,
+        0x00, 0x0c,
+        0x3a,
+        0x40,
+        0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        0x80, 0x00, 0x00, 0x00,
+        0x56, 0x78,
+        0x00, 0x03,
+        0xaa, 0xbb, 0xcc, 0xdd,
+    ])
+}
+
+private func findNode(in nodes: [PacketDetailNode], id: String) -> PacketDetailNode? {
+    for node in nodes {
+        if node.id == id || node.fieldName == id || node.id.hasPrefix("\(id).") {
+            return node
+        }
+
+        if let match = findNode(in: node.children, id: id) {
+            return match
+        }
+    }
+
+    return nil
+}
+
+private func nodeHasByteSource(_ node: PacketDetailNode, sourceID: String) -> Bool {
+    if node.byteRange?.sourceID == sourceID {
+        return true
+    }
+    return node.children.contains { nodeHasByteSource($0, sourceID: sourceID) }
+}
+
+private func findNode(in nodes: [PacketDetailNode], fieldName: String) -> PacketDetailNode? {
+    for node in nodes {
+        if node.fieldName == fieldName {
+            return node
+        }
+
+        if let match = findNode(in: node.children, fieldName: fieldName) {
+            return match
+        }
+    }
+
+    return nil
+}
+
+private func findFirstNode(in nodes: [PacketDetailNode], matching predicate: (PacketDetailNode) -> Bool) -> PacketDetailNode? {
+    for node in nodes {
+        if predicate(node) {
+            return node
+        }
+
+        if let match = findFirstNode(in: node.children, matching: predicate) {
+            return match
+        }
+    }
+
+    return nil
+}
+
+private func wiresharkDisabledCore() -> NativeTCPViewerCore {
+    NativeTCPViewerCore(disablesWiresharkForOfflineDocuments: true, disablesWiresharkForLiveSessions: true)
+}
+
+private func makePaddedPacket(base: Data, byteCount: Int) -> Data {
+    var packet = base
+    if packet.count < byteCount {
+        packet.append(Data(repeating: 0, count: byteCount - packet.count))
+    }
+    return packet
+}
+
+private func makeUnknownEtherTypePacket(etherType: UInt16, byteCount: Int) -> Data {
+    var packet = makePaddedPacket(base: makeIPv4UDPPayloadPacket(), byteCount: byteCount)
+    packet[12] = UInt8((etherType >> 8) & 0xff)
+    packet[13] = UInt8(etherType & 0xff)
+    return packet
+}
+
+private func isHexEtherTypeProtocol(_ value: String) -> Bool {
+    value.range(of: #"^0x[0-9a-fA-F]{4}$"#, options: .regularExpression) != nil
+}
+
+private func residentMemoryBytes() -> UInt64 {
+#if canImport(Darwin)
+    var info = mach_task_basic_info()
+    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.stride / MemoryLayout<natural_t>.stride)
+    let result = withUnsafeMutablePointer(to: &info) { pointer in
+        pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { reboundPointer in
+            task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), reboundPointer, &count)
+        }
+    }
+
+    guard result == KERN_SUCCESS else {
+        return 0
+    }
+
+    return UInt64(info.resident_size)
+#else
+    // Linux portability: VmRSS from /proc/self/status is the task_info
+    // (MACH_TASK_BASIC_INFO) equivalent.
+    guard let status = try? String(contentsOfFile: "/proc/self/status", encoding: .utf8),
+          let line = status.split(separator: "\n").first(where: { $0.hasPrefix("VmRSS:") })
+    else {
+        return 0
+    }
+
+    let digits = line.drop(while: { !$0.isNumber }).prefix(while: { $0.isNumber })
+    guard let kilobytes = UInt64(digits) else {
+        return 0
+    }
+    return kilobytes * 1024
+#endif
+}
+
+private func logMemorySamples(_ samples: [(String, UInt64)]) {
+    let formatted = samples.map { label, bytes in
+        String(format: "%@: %.1f MB", label, Double(bytes) / 1_048_576.0)
+    }
+    print("TCPViewer RSS stress samples: \(formatted.joined(separator: ", "))")
+}
+
+private func findNode(in nodes: [PacketDetailNode], name: String) -> PacketDetailNode? {
+    for node in nodes {
+        if node.name == name {
+            return node
+        }
+
+        if let match = findNode(in: node.children, name: name) {
+            return match
+        }
+    }
+
+    return nil
+}
+
+private extension Data {
+    mutating func appendLittleEndian<T: FixedWidthInteger>(_ value: T) {
+        var littleEndian = value.littleEndian
+        Swift.withUnsafeBytes(of: &littleEndian) { buffer in
+            append(buffer.bindMemory(to: UInt8.self))
+        }
+    }
+
+    mutating func appendBigEndian<T: FixedWidthInteger>(_ value: T) {
+        var bigEndian = value.bigEndian
+        Swift.withUnsafeBytes(of: &bigEndian) { buffer in
+            append(buffer.bindMemory(to: UInt8.self))
+        }
+    }
+
+    mutating func appendPCAPNGPadding(for byteCount: Int) {
+        let padding = (4 - (byteCount % 4)) % 4
+        if padding > 0 {
+            append(Data(repeating: 0, count: padding))
+        }
+    }
+}
+
+private extension Array where Element == UInt8 {
+    mutating func appendBigEndian<T: FixedWidthInteger>(_ value: T) {
+        var bigEndian = value.bigEndian
+        Swift.withUnsafeBytes(of: &bigEndian) { buffer in
+            append(contentsOf: buffer.bindMemory(to: UInt8.self))
+        }
+    }
+
+    mutating func appendUInt24BigEndian(_ value: Int) {
+        append(UInt8((value >> 16) & 0xff))
+        append(UInt8((value >> 8) & 0xff))
+        append(UInt8(value & 0xff))
+    }
+}
+
+private extension Optional {
+    func unwrap(fileID: String = #fileID, line: Int = #line) throws -> Wrapped {
+        guard let value = self else {
+            throw TestSupportError(message: "Unexpected nil while unwrapping an optional.", fileID: fileID, line: line)
+        }
+        return value
+    }
+}
+
+private struct TestSupportError: Error, CustomStringConvertible {
+    let message: String
+    let fileID: String
+    let line: Int
+
+    var description: String {
+        "\(message) (\(fileID):\(line))"
+    }
+}
