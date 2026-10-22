@@ -510,6 +510,40 @@ func NativeNSError(_ code: TCPViewerNativeErrorCode, _ message: String) -> NSErr
     NSError(domain: TCPViewerNativeErrorDomain, code: code.rawValue, userInfo: [NSLocalizedDescriptionKey: message])
 }
 
+extension TCPViewerCoreError {
+    // Swift's automatic NSError bridging drops a custom error's code and message,
+    // but the native core's ObjC-style `error:` out-parameters carried them. Round
+    // trip through the native domain so NativeBridgeMapper.coreError recovers both.
+    var nativeBridgeNSError: NSError {
+        let nativeCode: Int
+        switch code {
+        case .unsupportedInterface, .interfaceDiscoveryFailed:
+            nativeCode = TCPViewerNativeErrorCode.unsupportedInterface.rawValue
+        case .capturePermissionDenied, .liveSessionStartFailed:
+            nativeCode = TCPViewerNativeErrorCode.captureStartFailed.rawValue
+        case .liveSessionControlFailed:
+            nativeCode = TCPViewerNativeErrorCode.capturePauseFailed.rawValue
+        case .offlineFileOpenFailed, .malformedCapture:
+            nativeCode = TCPViewerNativeErrorCode.fileReadFailed.rawValue
+        case .offlineFileSaveFailed, .writerFailure:
+            nativeCode = TCPViewerNativeErrorCode.fileWriteFailed.rawValue
+        case .invalidCaptureOptions, .integrationMisconfigured:
+            nativeCode = TCPViewerNativeErrorCode.invalidOptions.rawValue
+        case .invalidCaptureFilter:
+            nativeCode = TCPViewerNativeErrorCode.invalidFilter.rawValue
+        case .operationCancelled:
+            nativeCode = TCPViewerNativeErrorCode.operationCancelled.rawValue
+        case .unavailableFeature:
+            nativeCode = TCPViewerNativeErrorCode.unavailableFeature.rawValue
+        }
+        return NSError(
+            domain: TCPViewerNativeErrorDomain,
+            code: nativeCode,
+            userInfo: [NSLocalizedDescriptionKey: message]
+        )
+    }
+}
+
 func NativeErrorIsCriticalWiresharkException(_ error: Error) -> Bool {
     let nsError = error as NSError
     return nsError.domain == TCPViewerNativeErrorDomain

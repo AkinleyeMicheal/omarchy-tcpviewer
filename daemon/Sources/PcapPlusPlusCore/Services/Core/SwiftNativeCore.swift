@@ -25,7 +25,7 @@ final class PCPPNativeCore {
         do {
             return try discoverInterfaces()
         } catch let thrownError {
-            errorPointer?.pointee = NativeBridgeMapper.coreError(thrownError, defaultCode: .interfaceDiscoveryFailed) as NSError
+            errorPointer?.pointee = NativeBridgeMapper.coreError(thrownError, defaultCode: .interfaceDiscoveryFailed).nativeBridgeNSError
             return []
         }
     }
@@ -191,7 +191,7 @@ final class PCPPNativeOfflineDocument {
         } catch let thrownError {
             loadedFile = NativeCaptureFile.empty(url: url)
             loadedFormat = CaptureFileFormat.defaultExportFormat.rawValue
-            errorPointer?.pointee = NativeBridgeMapper.coreError(thrownError, defaultCode: .offlineFileOpenFailed) as NSError
+            errorPointer?.pointee = NativeBridgeMapper.coreError(thrownError, defaultCode: .offlineFileOpenFailed).nativeBridgeNSError
         }
         self.state = Protected(PCPPNativeOfflineDocumentState(
             file: loadedFile,
@@ -214,7 +214,7 @@ final class PCPPNativeOfflineDocument {
         } catch let thrownError {
             loadedFile = NativeCaptureFile.empty(url: url)
             loadedFormat = CaptureFileFormat.defaultExportFormat.rawValue
-            errorPointer?.pointee = NativeBridgeMapper.coreError(thrownError, defaultCode: .offlineFileOpenFailed) as NSError
+            errorPointer?.pointee = NativeBridgeMapper.coreError(thrownError, defaultCode: .offlineFileOpenFailed).nativeBridgeNSError
         }
         self.state = Protected(PCPPNativeOfflineDocumentState(
             file: loadedFile,
@@ -501,7 +501,7 @@ final class PCPPNativeOfflineDocument {
     }
 
     private func assign(_ thrownError: Error, to errorPointer: AutoreleasingUnsafeMutablePointer<NSError?>?) {
-        errorPointer?.pointee = NativeBridgeMapper.coreError(thrownError, defaultCode: .offlineFileOpenFailed) as NSError
+        errorPointer?.pointee = NativeBridgeMapper.coreError(thrownError, defaultCode: .offlineFileOpenFailed).nativeBridgeNSError
     }
 
     private func configureDissectionSession(error errorPointer: AutoreleasingUnsafeMutablePointer<NSError?>?) {
@@ -512,7 +512,7 @@ final class PCPPNativeOfflineDocument {
             }
         } catch let thrownError {
             if errorPointer?.pointee == nil {
-                errorPointer?.pointee = NativeBridgeMapper.coreError(thrownError, defaultCode: .unavailableFeature) as NSError
+                errorPointer?.pointee = NativeBridgeMapper.coreError(thrownError, defaultCode: .unavailableFeature).nativeBridgeNSError
             }
         }
     }
