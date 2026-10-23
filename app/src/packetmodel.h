@@ -75,6 +75,8 @@ public:
     Q_INVOKABLE void setColumnCount(int count);
     Q_INVOKABLE QString packetIDAt(int row) const;
     Q_INVOKABLE int rowForPacketID(const QString &packetID) const;
+    Q_INVOKABLE int numberAt(int row) const;
+    Q_INVOKABLE QString summaryAt(int row) const;
     // Flat snapshot for derived models (endpoint statistics).
     Q_INVOKABLE QVariantList snapshotRows() const;
     Q_INVOKABLE const QString &protocolAt(int row) const;

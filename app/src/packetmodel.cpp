@@ -116,6 +116,16 @@ void PacketListModel::clear()
     emit countChanged();
 }
 
+int PacketListModel::numberAt(int row) const
+{
+    return row >= 0 && row < m_rows.size() ? static_cast<int>(m_rows.at(row).number) : 0;
+}
+
+QString PacketListModel::summaryAt(int row) const
+{
+    return row >= 0 && row < m_rows.size() ? m_rows.at(row).summary : QString();
+}
+
 QString PacketListModel::packetIDAt(int row) const
 {
     if (row < 0 || row >= m_rows.size())

@@ -32,9 +32,10 @@ fuzzing was performed in this pass.
 
 ## Verified controls
 
-- **No SSRF surface.** No `URLSession`, libcurl, QtNetwork, `XMLHttpRequest`,
-  `fetch`, WebSocket client, or outbound `connect()` exists in the app or
-  daemon. The only sockets are the `AF_UNIX` IPC endpoints. Imports are local
+- **No SSRF surface.** No `URLSession`, libcurl, HTTP client,
+  `XMLHttpRequest`, `fetch`, WebSocket client, or outbound `connect()` exists in
+  the app or daemon. QtNetwork is linked only for `QLocalSocket` (the `AF_UNIX`
+  IPC transport). The only sockets are the `AF_UNIX` IPC endpoints. Imports are local
   files only, and the daemon's import validator requires an absolute path to an
   existing regular `.pcap`/`.pcapng`/`.cap` file. Nothing in the UI can make the
   daemon fetch a URL.
@@ -52,8 +53,9 @@ fuzzing was performed in this pass.
 - **Privileges.** No setuid binaries. The daemon's only elevated capabilities
   are `cap_net_raw,cap_net_admin`, used for live capture; the GUI and CLI are
   unprivileged.
-- **Dependencies.** The app links Qt Quick/Widgets/Dialogs only — no QtNetwork
-  or QtWebEngine. The plugin currently has a manifest but no runtime code.
+- **Dependencies.** The app links Qt Quick/Controls plus QtNetwork for
+  `QLocalSocket` only; no QtWebEngine. The plugin currently has a manifest but
+  no runtime code.
 
 ## Residual risks and recommendations
 

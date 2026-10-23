@@ -50,6 +50,8 @@ public:
         return value > 0 ? qBound(1, value, 8) : 1;
     }
     bool startupStatistics() const { return qEnvironmentVariableIsSet("TCPVIEWER_OPEN_STATS"); }
+    // CI hook: comma-separated packet IDs to compare (TCPVIEWER_DIFF_PACKETS).
+    QString startupDiffPackets() const { return qEnvironmentVariable("TCPVIEWER_DIFF_PACKETS"); }
     QVariantList interfaces() const { return m_interfaces; }
     QVariantList sources() const { return m_sources; }
     QVariantMap status() const { return m_status; }
@@ -76,6 +78,7 @@ public:
     Q_INVOKABLE void reportError(const QString &message);
     // Test hook: TCPVIEWER_OPEN_STATS opens the statistics window at launch.
     Q_PROPERTY(bool startupStatistics READ startupStatistics CONSTANT)
+    Q_PROPERTY(QString startupDiffPackets READ startupDiffPackets CONSTANT)
     Q_INVOKABLE void closeSource(const QString &sourceID);
     Q_INVOKABLE void selectSource(const QString &sourceID);
     Q_INVOKABLE void clearPackets();

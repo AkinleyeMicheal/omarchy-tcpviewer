@@ -520,6 +520,18 @@ ApplicationWindow {
         rowContextMenu.openFor(index, globalX, globalY)
     }
 
+    // Upstream Diff menu (⌘Y): snapshot the selected packet into the pool.
+    function addSelectedToDiff() {
+        if (session.selectedPacketID === "")
+            return
+        const row = session.packets.rowForPacketID(session.selectedPacketID)
+        if (row < 0)
+            return
+        diff.addPacket(session.currentSourceID, session.selectedPacketID,
+                       session.packets.numberAt(row), session.packets.summaryAt(row))
+        diffWindow.openAndRaise()
+    }
+
     function openCaptureDialog() {
         openDialog.open()
     }
@@ -563,6 +575,18 @@ ApplicationWindow {
                 ? "Follow TCP Stream" : "Follow UDP Stream"
             onTriggered: follow.follow(String(session.packets.packetIDAt(rowContextMenu.pendingRow)))
         }
+
+        MenuItem {
+            text: "Diff Selected Packet"
+            onTriggered: {
+                const row = rowContextMenu.pendingRow
+                if (row < 0)
+                    return
+                diff.addPacket(session.currentSourceID, session.packets.packetIDAt(row),
+                               session.packets.numberAt(row), session.packets.summaryAt(row))
+                diffWindow.openAndRaise()
+            }
+        }
     }
 
     Shortcut {
@@ -585,6 +609,21 @@ ApplicationWindow {
         onActivated: statsWindow.openAndRaise()
     }
 
+    Shortcut {
+        sequences: ["Ctrl+Y"]
+        onActivated: window.addSelectedToDiff()
+    }
+
+    // Diff window (upstream DiffWindowController).
+    DiffController {
+        id: diff
+    }
+
+    DiffWindow {
+        id: diffWindow
+        diff: diff
+    }
+
     // Endpoint statistics (toolbar Σ), upstream Tools item.
     EndpointStatisticsModel {
         id: endpointStats
@@ -604,6 +643,8 @@ ApplicationWindow {
             window.tabCount = tabs
         if (session.startupStatistics)
             statsTimer.start()
+        if (session.startupDiffPackets !== "")
+            diffTimer.start()
         if (bench.enabled)
             bench.start(session.packets, window)
     }
@@ -613,6 +654,30 @@ ApplicationWindow {
         interval: 1500
         repeat: false
         onTriggered: statsWindow.openAndRaise()
+    }
+
+    // CI/screenshot hook: wait for the capture rows, then compare the IDs.
+    Timer {
+        id: diffTimer
+        interval: 400
+        repeat: true
+        onTriggered: {
+            const ids = session.startupDiffPackets.split(",")
+            const rows = []
+            for (let i = 0; i < ids.length; ++i) {
+                const row = session.packets.rowForPacketID(ids[i].trim())
+                if (row < 0)
+                    return
+                rows.push(row)
+            }
+            diffTimer.stop()
+            for (let i = 0; i < rows.length; ++i) {
+                const row = rows[i]
+                diff.addPacket(session.currentSourceID, session.packets.packetIDAt(row),
+                               session.packets.numberAt(row), session.packets.summaryAt(row))
+            }
+            diffWindow.openAndRaise()
+        }
     }
 
     component ToolbarButton: Rectangle {

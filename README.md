@@ -47,6 +47,19 @@ sudo setcap cap_net_raw,cap_net_admin+ep daemon/.build/debug/tcpviewerd
 
 Opening capture files works without capabilities.
 
+## Diff
+
+Select a packet and press `Ctrl+Y` (or right-click → Diff Selected Packet) to
+add it to the Diff pool. Add a second packet the same way; the first two are
+assigned Left and Right. The window compares:
+
+- **Packet Details** as side-by-side or unified text with changed lines tinted.
+- **Packet Bytes** as two hex panes with the changed range highlighted.
+
+`F7` / `Shift+F7` jump between changed lines. `Clear` empties the pool. Detail
+diffs are capped at 2000 lines per side; byte diffs trim the common prefix and
+suffix before highlighting, so length changes do not mark every later byte.
+
 ## Security
 
 See [docs/security-review.md](docs/security-review.md). In short: the IPC socket

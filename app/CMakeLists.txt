@@ -21,6 +21,8 @@ qt_add_executable(omarchy-tcpviewer
     src/daemonclient.cpp
     src/sessioncontroller.cpp
     src/packetinspector.cpp
+    src/diffcontroller.cpp
+    src/diffalgorithms.cpp
 )
 
 target_link_libraries(omarchy-tcpviewer PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Network)
@@ -37,6 +39,7 @@ set_source_files_properties(qml/EmptyState.qml PROPERTIES QT_RESOURCE_ALIAS Empt
 set_source_files_properties(qml/Inspector.qml PROPERTIES QT_RESOURCE_ALIAS Inspector.qml)
 set_source_files_properties(qml/FollowStreamWindow.qml PROPERTIES QT_RESOURCE_ALIAS FollowStreamWindow.qml)
 set_source_files_properties(qml/EndpointStatisticsWindow.qml PROPERTIES QT_RESOURCE_ALIAS EndpointStatisticsWindow.qml)
+set_source_files_properties(qml/DiffWindow.qml PROPERTIES QT_RESOURCE_ALIAS DiffWindow.qml)
 set_source_files_properties(qml/Theme.qml PROPERTIES
     QT_RESOURCE_ALIAS Theme.qml
     QT_QML_SINGLETON_TYPE TRUE
@@ -57,6 +60,7 @@ qt_add_qml_module(omarchy-tcpviewer
         qml/Inspector.qml
         qml/FollowStreamWindow.qml
         qml/EndpointStatisticsWindow.qml
+        qml/DiffWindow.qml
     SOURCES
         src/packetmodel.h
         src/packetdetailmodel.h
@@ -67,4 +71,20 @@ qt_add_qml_module(omarchy-tcpviewer
         src/daemonclient.h
         src/sessioncontroller.h
         src/packetinspector.h
+        src/diffcontroller.h
+        src/diffalgorithms.h
 )
+
+# Pure diff logic tests (no GUI or daemon required).
+option(TCPVIEWER_BUILD_TESTS "Build app unit tests" ON)
+if(TCPVIEWER_BUILD_TESTS)
+    find_package(Qt6 6.7 REQUIRED COMPONENTS Test)
+    enable_testing()
+    qt_add_executable(diffalgorithms_test
+        tests/diffalgorithms_test.cpp
+        src/diffalgorithms.cpp
+    )
+    target_include_directories(diffalgorithms_test PRIVATE src)
+    target_link_libraries(diffalgorithms_test PRIVATE Qt6::Test)
+    add_test(NAME diffalgorithms COMMAND diffalgorithms_test)
+endif()
