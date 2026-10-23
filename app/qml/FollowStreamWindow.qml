@@ -193,7 +193,7 @@ Window {
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: {
-                                    window.session.selectPacket(String(model.packetID))
+                                    window.session.revealPacket(String(model.packetID))
                                     revealButton.forceActiveFocus()
                                 }
                             }
@@ -203,7 +203,7 @@ Window {
                             id: headerArea
                             anchors.fill: parent
                             hoverEnabled: true
-                            onClicked: window.session.selectPacket(String(model.packetID))
+                            onClicked: window.session.revealPacket(String(model.packetID))
                         }
                     }
 

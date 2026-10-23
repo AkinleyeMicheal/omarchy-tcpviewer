@@ -20,6 +20,7 @@ qt_add_executable(omarchy-tcpviewer
     src/benchmark.cpp
     src/daemonclient.cpp
     src/sessioncontroller.cpp
+    src/packetinspector.cpp
 )
 
 target_link_libraries(omarchy-tcpviewer PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Network)
@@ -65,4 +66,5 @@ qt_add_qml_module(omarchy-tcpviewer
         src/benchmark.h
         src/daemonclient.h
         src/sessioncontroller.h
+        src/packetinspector.h
 )

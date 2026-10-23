@@ -7,7 +7,7 @@ import Omarchy.TCPViewer
 Rectangle {
     id: root
 
-    required property SessionController session
+    required property PacketInspector inspector
 
     color: Theme.contentBackground
 
@@ -64,15 +64,10 @@ Rectangle {
                 font.family: Theme.monoFont
                 font.pixelSize: Theme.uiSmall
                 selectByMouse: true
-                text: root.session.autoDetailFilter
-                onTextChanged: root.session.detailModel.setFilterText(text)
+                text: root.inspector.autoDetailFilter
+                onTextChanged: root.inspector.detailModel.setFilterText(text)
 
-                Connections {
-                    target: root.session
-                    function onSelectedPacketIDChanged() {
-                        // Filter text persists across packets, matching upstream.
-                    }
-                }
+
             }
         }
 
@@ -107,9 +102,9 @@ Rectangle {
                 id: tree
                 anchors.fill: parent
                 clip: true
-                model: root.session.detailModel
+                model: root.inspector.detailModel
                 currentIndex: -1
-                visible: root.session.selectedPacketID !== "" && root.session.detailError === ""
+                visible: root.inspector.packetID !== "" && root.inspector.error === ""
 
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
@@ -154,7 +149,7 @@ Rectangle {
 
                         MouseArea {
                             anchors.fill: parent
-                            onClicked: root.session.detailModel.toggleExpanded(row.index)
+                            onClicked: root.inspector.detailModel.toggleExpanded(row.index)
                         }
                     }
 
@@ -183,25 +178,25 @@ Rectangle {
                         onClicked: tree.currentIndex = row.index
                         onDoubleClicked: {
                             if (row.hasChildren)
-                                root.session.detailModel.toggleExpanded(row.index)
+                                root.inspector.detailModel.toggleExpanded(row.index)
                         }
                     }
                 }
 
                 Connections {
-                    target: root.session.detailModel
+                    target: root.inspector.detailModel
                     function onModelReset() {
                         // ListView assigns currentIndex 0 after a reset; wait one frame.
-                        var target = root.session.autoSelectDetailRow >= 0
-                            ? Math.min(root.session.autoSelectDetailRow, root.session.detailModel.rowCount() - 1)
+                        var target = root.inspector.autoSelectDetailRow >= 0
+                            ? Math.min(root.inspector.autoSelectDetailRow, root.inspector.detailModel.rowCount() - 1)
                             : -1
                         Qt.callLater(function() { tree.currentIndex = target })
                     }
                 }
 
                 Connections {
-                    target: root.session
-                    function onSelectedPacketIDChanged() {
+                    target: root.inspector
+                    function onPacketIDChanged() {
                         tree.currentIndex = -1
                         tree.contentY = 0
                     }
@@ -211,7 +206,7 @@ Rectangle {
             Column {
                 anchors.centerIn: parent
                 spacing: 6
-                visible: root.session.detailLoading && root.session.detailModel.rowCount === 0
+                visible: root.inspector.loading && root.inspector.detailModel.rowCount === 0
 
                 BusyIndicator {
                     anchors.horizontalCenter: parent.horizontalCenter
@@ -232,8 +227,8 @@ Rectangle {
             Text {
                 anchors.centerIn: parent
                 width: Math.min(parent.width - 40, 320)
-                visible: root.session.detailError !== ""
-                text: root.session.detailError
+                visible: root.inspector.error !== ""
+                text: root.inspector.error
                 wrapMode: Text.WordWrap
                 horizontalAlignment: Text.AlignHCenter
                 font.family: Theme.uiFont
@@ -243,7 +238,7 @@ Rectangle {
 
             EmptyState {
                 anchors.fill: parent
-                visible: root.session.selectedPacketID === "" && !root.session.detailLoading
+                visible: root.inspector.packetID === "" && !root.inspector.loading
                 glyph: "▤"
                 title: "No Packet Selected"
                 message: "Select a packet to inspect its protocol tree and bytes."
@@ -257,11 +252,11 @@ Rectangle {
             SplitView.preferredHeight: Math.max(120, detailSplit.height * 0.30)
             SplitView.minimumHeight: 120
 
-            bytes: root.session.packetBytes
+            bytes: root.inspector.packetBytes
             highlightOffset: tree.currentIndex >= 0
-                ? root.session.detailModel.byteOffsetAt(tree.currentIndex) : -1
+                ? root.inspector.detailModel.byteOffsetAt(tree.currentIndex) : -1
             highlightLength: tree.currentIndex >= 0
-                ? root.session.detailModel.byteLengthAt(tree.currentIndex) : 0
+                ? root.inspector.detailModel.byteLengthAt(tree.currentIndex) : 0
             fontFamily: Theme.monoFont
             pixelSize: Math.max(9, Theme.packetFontSize - 1)
             textColor: Theme.label

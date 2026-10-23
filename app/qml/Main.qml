@@ -19,6 +19,36 @@ ApplicationWindow {
     property bool inspectorVisible: true
     property string inspectorPlacement: "trailing"
 
+    // Workspace tabs + split panes (upstream TCPViewerWindowController):
+    // every tab is a workspace; a tab may show a second side-by-side pane.
+    property int tabCount: 1
+    property int activeTab: 0
+    // Focused workspace routes inspector fetches (per-pane selection state).
+    property string focusedPaneID: "0:0"
+
+    function newTab() {
+        // Upstream: ⌘T adds a workspace tab. Tabs share the current source in
+        // this port; each tab keeps its own panes, selection and inspector.
+        tabCount += 1
+        activeTab = tabCount - 1
+        focusedPaneID = (tabCount - 1) + ":0"
+    }
+
+    function closeActiveTab() {
+        if (tabCount <= 1)
+            return
+        tabCount -= 1
+        if (activeTab >= tabCount)
+            activeTab = tabCount - 1
+        focusedPaneID = activeTab + ":0"
+    }
+
+    function toggleSplit() {
+        var tab = tabsRepeater.itemAt(activeTab)
+        if (tab)
+            tab.splitVisible = !tab.splitVisible
+    }
+
     SessionController {
         id: session
         Component.onCompleted: start()
@@ -197,33 +227,19 @@ ApplicationWindow {
                     anchors.centerIn: parent
                     text: session.capturing ? "Stop" : "Start"
                     font.family: Theme.uiFont
-                    font.pixelSize: Theme.uiSize
+                    font.pixelSize: Theme.uiSmall
                     font.weight: Font.DemiBold
                     color: "white"
                 }
 
                 MouseArea {
                     anchors.fill: parent
-                    enabled: session.connected
                     onClicked: {
                         if (session.capturing)
                             session.stopCapture()
                         else
                             session.startCapture(session.selectedInterface)
                     }
-                }
-            }
-
-            ToolbarButton {
-                visible: session.capturing
-                glyph: session.capturePhase === "paused" ? "▶" : "❚❚"
-                width: 28
-                tooltip: session.capturePhase === "paused" ? "Resume Capture" : "Pause Capture"
-                onClicked: {
-                    if (session.capturePhase === "paused")
-                        session.resumeCapture()
-                    else
-                        session.pauseCapture()
                 }
             }
 
@@ -248,6 +264,13 @@ ApplicationWindow {
             }
 
             ToolbarButton {
+                glyph: "◫"
+                width: 28
+                tooltip: "Toggle Split View"
+                onClicked: window.toggleSplit()
+            }
+
+            ToolbarButton {
                 glyph: "▤"
                 width: 28
                 tooltip: window.inspectorVisible ? "Hide Inspector" : "Show Inspector"
@@ -255,7 +278,7 @@ ApplicationWindow {
             }
 
             ToolbarButton {
-                glyph: window.inspectorPlacement === "trailing" ? "◫" : "☰"
+                glyph: window.inspectorPlacement === "trailing" ? "⇅" : "☰"
                 width: 28
                 tooltip: window.inspectorPlacement === "trailing"
                     ? "Move Inspector to Bottom" : "Move Inspector to Side"
@@ -304,9 +327,90 @@ ApplicationWindow {
         }
     }
 
-    // Main split --------------------------------------------------------------
-    SplitView {
+    // Tab bar (upstream TCPViewerWorkspaceTabBar); only shown past one tab.
+    Rectangle {
+        id: tabBarStrip
         anchors.top: toolbar.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: window.tabCount > 1 ? 30 : 0
+        visible: height > 0
+        color: Theme.headerBackground
+
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 8
+            spacing: 4
+
+            Repeater {
+                model: window.tabCount
+
+                delegate: Rectangle {
+                    required property int index
+
+                    width: 168
+                    height: 22
+                    radius: 6
+                    color: window.activeTab === index
+                        ? Theme.contentBackground : "transparent"
+                    border.width: window.activeTab === index ? 1 : 0
+                    border.color: Theme.separator
+
+                    Text {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Capture " + (parent.index + 1)
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.uiSmall
+                        font.weight: window.activeTab === parent.index ? Font.DemiBold : Font.Normal
+                        color: Theme.label
+                    }
+
+                    Text {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: window.tabCount > 1
+                        text: "×"
+                        font.pixelSize: 12
+                        color: closeMouse.containsMouse ? Theme.label : Theme.secondaryLabel
+
+                        MouseArea {
+                            id: closeMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onClicked: {
+                                window.tabCount -= 1
+                                if (window.activeTab >= window.tabCount)
+                                    window.activeTab = window.tabCount - 1
+                                window.focusedPaneID = window.activeTab + ":0"
+                            }
+                        }
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: window.activeTab = parent.index
+                    }
+                }
+            }
+
+            ToolbarButton {
+                glyph: "+"
+                width: 24
+                tooltip: "New Tab"
+                onClicked: window.newTab()
+            }
+
+            Item { Layout.fillWidth: true }
+        }
+    }
+
+    // Main split: sidebar | workspace panes -------------------------------------
+    SplitView {
+        anchors.top: tabBarStrip.bottom
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
@@ -331,180 +435,69 @@ ApplicationWindow {
             id: contentHost
             color: "transparent"
 
-            SplitView {
-                id: contentSplit
+            StackLayout {
+                id: tabHost
                 anchors.fill: parent
-                orientation: window.inspectorPlacement === "bottom" ? Qt.Vertical : Qt.Horizontal
+                currentIndex: window.activeTab
 
-                handle: Rectangle {
-                    implicitWidth: 1
-                    implicitHeight: 1
-                    color: Theme.separator
-                }
+                Repeater {
+                    id: tabsRepeater
+                    model: window.tabCount
 
-                Rectangle {
-                    id: workspace
-                    color: Theme.contentBackground
-                    SplitView.fillWidth: true
-                    SplitView.fillHeight: true
-                    SplitView.minimumWidth: 480
-                    SplitView.minimumHeight: 160
+                    delegate: Item {
+                        id: tabContent
+                        required property int index
 
-            QuickFilterBar {
-                id: quickFilter
-                anchors.top: parent.top
-                anchors.left: parent.left
-                anchors.right: parent.right
-                height: Theme.quickFilterHeight
-                session: session
-            }
+                        // Split is remembered per tab; the launch hook seeds tab 0.
+                        property bool splitVisible: session.startupSplit && index === 0
+                        property alias firstPane: pane0
+                        property alias secondPane: pane1
 
-            Rectangle {
-                id: errorBanner
-                anchors.top: quickFilter.bottom
-                anchors.left: parent.left
-                anchors.right: parent.right
-                height: session.errorText !== "" ? 28 : 0
-                visible: height > 0
-                color: Theme.dark ? "#3a2323" : "#fdecec"
+                        clip: true
 
-                Text {
-                    anchors.left: parent.left
-                    anchors.leftMargin: 12
-                    anchors.right: dismissError.left
-                    anchors.rightMargin: 8
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: session.errorText
-                    elide: Text.ElideRight
-                    font.family: Theme.uiFont
-                    font.pixelSize: Theme.uiSmall
-                    color: Theme.systemRed
-                }
+                        SplitView {
+                            id: paneSplit
+                            anchors.fill: parent
+                            orientation: Qt.Horizontal
 
-                Text {
-                    id: dismissError
-                    anchors.right: parent.right
-                    anchors.rightMargin: 10
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "×"
-                    font.pixelSize: 12
-                    color: Theme.secondaryLabel
+                            handle: Rectangle {
+                                implicitWidth: 1
+                                implicitHeight: 1
+                                color: Theme.separator
+                            }
 
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: session.clearError()
+                            Workspace {
+                                id: pane0
+                                paneID: tabContent.index + ":0"
+                                controller: session
+                                isPrimary: tabContent.index === 0
+                                SplitView.fillWidth: true
+                                SplitView.minimumWidth: 420
+                            }
+
+                            Workspace {
+                                id: pane1
+                                paneID: tabContent.index + ":1"
+                                controller: session
+                                isPrimary: false
+                                visible: tabContent.splitVisible
+                                SplitView.fillWidth: true
+                                SplitView.minimumWidth: 420
+                            }
+                        }
                     }
-                }
-            }
-
-            StatusStrip {
-                id: statusStrip
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                height: Theme.statusStripHeight
-                session: session
-            }
-
-            Item {
-                id: viewport
-                anchors.top: errorBanner.visible ? errorBanner.bottom : quickFilter.bottom
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: statusStrip.top
-
-                PacketTableView {
-                    id: productionTable
-                    anchors.fill: parent
-                    model: session.packets
-                    follow: true
-                    visible: bench.enabled ? bench.view === "table" : (session.packets.count > 0)
-                    onRowClicked: function(index) {
-                        if (bench.enabled)
-                            return
-                        session.selectPacket(session.packets.packetIDAt(index))
-                    }
-                    onRowContextClicked: function(index, globalX, globalY) {
-                        if (bench.enabled)
-                            return
-                        rowContextMenu.openFor(index, globalX, globalY)
-                    }
-                }
-
-                PacketTableListView {
-                    id: listTable
-                    anchors.fill: parent
-                    model: session.packets
-                    follow: bench.follow
-                    visible: bench.enabled && bench.view === "list"
-                }
-
-                Column {
-                    anchors.centerIn: parent
-                    spacing: 8
-                    visible: !bench.enabled && session.loading && session.packets.count === 0
-
-                    BusyIndicator {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        width: 24
-                        height: 24
-                        running: visible
-                    }
-
-                    Text {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        text: "Loading…"
-                        font.family: Theme.uiFont
-                        font.pixelSize: Theme.uiSize
-                        color: Theme.secondaryLabel
-                    }
-                }
-
-                EmptyState {
-                    anchors.fill: parent
-                    visible: !bench.enabled && session.packets.count === 0
-                             && !session.loading && session.currentSourceID === ""
-                    onStartCaptureRequested: session.startCapture(session.selectedInterface)
-                    onOpenFileRequested: openDialog.open()
-                }
-
-                EmptyState {
-                    anchors.fill: parent
-                    visible: !bench.enabled && session.packets.count === 0
-                             && !session.loading && session.currentSourceID !== ""
-                    glyph: "⌁"
-                    title: "No Packets"
-                    message: "This capture contains no packets, or the current filter hides them all."
-                    showStartAction: false
-                    showOpenAction: false
-                }
-            }
-        }
-
-                Inspector {
-                    id: inspector
-                    session: session
-                    visible: window.inspectorVisible && !bench.enabled
-                    SplitView.preferredWidth: window.inspectorPlacement === "trailing" ? 360 : 0
-                    SplitView.minimumWidth: window.inspectorPlacement === "trailing" ? 240 : 0
-                    SplitView.maximumWidth: window.inspectorPlacement === "trailing" ? 600 : 0
-                    SplitView.preferredHeight: window.inspectorPlacement === "bottom" ? 280 : 0
-                    SplitView.minimumHeight: window.inspectorPlacement === "bottom" ? 160 : 0
-                    SplitView.maximumHeight: window.inspectorPlacement === "bottom" ? 560 : 0
                 }
             }
         }
     }
 
-    // Keep the packet table's highlight aligned with the inspector selection.
+    // Follow reveal lands in the active tab's first pane (main window pane 0).
     Connections {
         target: session
-        function onSelectedPacketIDChanged() {
-            if (bench.enabled)
-                return
-            productionTable.selectedIndex = session.selectedPacketID === ""
-                ? -1
-                : session.packets.rowForPacketID(session.selectedPacketID)
+        function onRevealRequested(packetID) {
+            var tab = tabsRepeater.itemAt(window.activeTab)
+            if (tab)
+                tab.firstPane.revealPacket(String(packetID))
         }
     }
 
@@ -514,6 +507,20 @@ ApplicationWindow {
         fileMode: FileDialog.OpenFiles
         nameFilters: ["Capture files (*.pcap *.pcapng)", "All files (*)"]
         onAccepted: session.importFiles(selectedFiles)
+    }
+
+    // Bench + dialog helpers: inline components resolve document ids
+    // unreliably, so they reach these through window properties/functions.
+    readonly property bool benchEnabled: bench.enabled
+    readonly property string benchView: bench.view
+    readonly property bool benchFollowIds: bench.follow
+
+    function openContextMenu(index, globalX, globalY) {
+        rowContextMenu.openFor(index, globalX, globalY)
+    }
+
+    function openCaptureDialog() {
+        openDialog.open()
     }
 
     // Follow Stream -------------------------------------------------------------
@@ -562,7 +569,22 @@ ApplicationWindow {
         onActivated: openDialog.open()
     }
 
-    // Endpoint statistics (toolbar Σ / Ctrl+Shift+S), upstream Tools item.
+    Shortcut {
+        sequences: ["Ctrl+T"]
+        onActivated: window.newTab()
+    }
+
+    Shortcut {
+        sequences: ["Ctrl+W"]
+        onActivated: window.closeActiveTab()
+    }
+
+    Shortcut {
+        sequences: ["Ctrl+Shift+S"]
+        onActivated: statsWindow.openAndRaise()
+    }
+
+    // Endpoint statistics (toolbar Σ), upstream Tools item.
     EndpointStatisticsModel {
         id: endpointStats
     }
@@ -574,13 +596,11 @@ ApplicationWindow {
         session: session
     }
 
-    Shortcut {
-        sequences: ["Ctrl+Shift+S"]
-        onActivated: statsWindow.openAndRaise()
-    }
-
     Component.onCompleted: {
-        // CI/screenshot hook: show the workspace-level statistics window.
+        // CI/screenshot hooks: workspaces, statistics window, benchmark.
+        var tabs = session.startupTabs
+        if (tabs > window.tabCount)
+            window.tabCount = tabs
         if (session.startupStatistics)
             statsTimer.start()
         if (bench.enabled)
@@ -627,5 +647,219 @@ ApplicationWindow {
 
         ToolTip.visible: mouse.containsMouse && button.tooltip !== ""
         ToolTip.text: button.tooltip
+    }
+
+    // One workspace pane (upstream per-pane root controller): filter bar, error
+    // strip, table stack and status strip share the table area; the pane-owned
+    // inspector is the split tail.
+    component Workspace: Rectangle {
+        id: workspace
+
+        required property string paneID
+        required property SessionController controller
+        property bool isPrimary: true
+        // Focused workspace routes inspector fetches for session selections.
+        readonly property bool focused: window.focusedPaneID === paneID
+
+        function focusPane() {
+            window.focusedPaneID = workspace.paneID
+        }
+
+        function presentPacket(packetID) {
+            focusPane()
+            controller.selectPacket(packetID)
+            if (!window.benchEnabled)
+                paneInspector.select(packetID, controller.currentSourceID)
+        }
+
+        // Reveal path (follow-window): highlight this pane and fetch here.
+        function revealPacket(packetID) {
+            focusPane()
+            controller.selectPacket(packetID)
+            paneTable.selectedIndex = packetID === ""
+                ? -1 : controller.packets.rowForPacketID(packetID)
+            if (!window.benchEnabled)
+                paneInspector.select(packetID, controller.currentSourceID)
+        }
+
+        color: Theme.contentBackground
+
+        PacketInspector { id: paneInspector }
+
+        SplitView {
+            id: paneLayout
+            anchors.fill: parent
+            orientation: window.inspectorPlacement === "bottom" ? Qt.Vertical : Qt.Horizontal
+
+            handle: Rectangle {
+                implicitWidth: 1
+                implicitHeight: 1
+                color: Theme.separator
+            }
+
+            // Table area -----------------------------------------------------
+            Item {
+                id: tableArea
+                SplitView.fillWidth: true
+                SplitView.fillHeight: true
+                SplitView.minimumWidth: 420
+                SplitView.minimumHeight: 160
+
+                QuickFilterBar {
+                    id: quickFilter
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: Theme.quickFilterHeight
+                    session: controller
+                }
+
+                Rectangle {
+                    id: errorBanner
+                    anchors.top: quickFilter.bottom
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: controller.errorText !== "" ? 28 : 0
+                    visible: height > 0
+                    color: Theme.dark ? "#3a2323" : "#fdecec"
+
+                    Text {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 12
+                        anchors.right: dismissError.left
+                        anchors.rightMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: controller.errorText
+                        elide: Text.ElideRight
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.uiSmall
+                        color: Theme.systemRed
+                    }
+
+                    Text {
+                        id: dismissError
+                        anchors.right: parent.right
+                        anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "×"
+                        font.pixelSize: 12
+                        color: Theme.secondaryLabel
+
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: controller.clearError()
+                        }
+                    }
+                }
+
+                StatusStrip {
+                    id: statusStrip
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    height: Theme.statusStripHeight
+                    session: controller
+                }
+
+                Item {
+                    id: viewport
+                    anchors.top: errorBanner.visible ? errorBanner.bottom : quickFilter.bottom
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: statusStrip.top
+
+                    PacketTableView {
+                        id: paneTable
+                        anchors.fill: parent
+                        model: session.packets
+                        follow: true
+                        visible: (!window.benchEnabled || workspace.isPrimary)
+                            && (window.benchEnabled ? window.benchView === "table" : (controller.packets.count > 0))
+                        onRowClicked: function(index) {
+                            if (window.benchEnabled)
+                                return
+                            workspace.presentPacket(controller.packets.packetIDAt(index))
+                        }
+                        onRowContextClicked: function(index, globalX, globalY) {
+                            if (window.benchEnabled)
+                                return
+                            window.openContextMenu(index, globalX, globalY)
+                        }
+                    }
+
+                    PacketTableListView {
+                        id: listTable
+                        anchors.fill: parent
+                        model: session.packets
+                        follow: window.benchFollowIds
+                        visible: window.benchEnabled && workspace.isPrimary && window.benchView === "list"
+                    }
+
+                    Column {
+                        anchors.centerIn: parent
+                        spacing: 8
+                        visible: !window.benchEnabled && controller.loading && controller.packets.count === 0
+
+                        BusyIndicator {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: 24
+                            running: visible
+                        }
+
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: "Loading…"
+                            font.family: Theme.uiFont
+                            font.pixelSize: Theme.uiSize
+                            color: Theme.secondaryLabel
+                        }
+                    }
+
+                    EmptyState {
+                        anchors.fill: parent
+                        visible: !window.benchEnabled && controller.packets.count === 0
+                                 && !controller.loading && controller.currentSourceID === ""
+                        onStartCaptureRequested: session.startCapture(session.selectedInterface)
+                        onOpenFileRequested: window.openCaptureDialog()
+                    }
+
+                    EmptyState {
+                        anchors.fill: parent
+                        visible: !window.benchEnabled && controller.packets.count === 0
+                                 && !controller.loading && controller.currentSourceID !== ""
+                        glyph: "⌁"
+                        title: "No Packets"
+                        message: "This capture contains no packets, or the current filter hides them all."
+                        showStartAction: false
+                        showOpenAction: false
+                    }
+                }
+            }
+
+            // Inspector (pane-owned detail + hex state) ----------------------
+            Inspector {
+                inspector: paneInspector
+                visible: window.inspectorVisible && !window.benchEnabled
+                SplitView.preferredWidth: window.inspectorPlacement === "trailing" ? 360 : 0
+                SplitView.minimumWidth: window.inspectorPlacement === "trailing" ? 240 : 0
+                SplitView.maximumWidth: window.inspectorPlacement === "trailing" ? 600 : 0
+                SplitView.preferredHeight: window.inspectorPlacement === "bottom" ? 280 : 0
+                SplitView.minimumHeight: window.inspectorPlacement === "bottom" ? 160 : 0
+                SplitView.maximumHeight: window.inspectorPlacement === "bottom" ? 560 : 0
+            }
+        }
+
+        Connections {
+            target: session
+            function onSelectedPacketIDChanged() {
+                // Highlight mirrors the global selection; the focused pane also
+                // drives its inspector (upstream per-pane inspector state).
+                paneTable.selectedIndex = session.selectedPacketID === ""
+                    ? -1
+                    : controller.packets.rowForPacketID(session.selectedPacketID)
+                if (workspace.focused && !window.benchEnabled)
+                    paneInspector.select(session.selectedPacketID, controller.currentSourceID)
+            }
+        }
     }
 }
