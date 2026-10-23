@@ -2,20 +2,21 @@
   "schemaVersion": 1,
   "id": "fonsgaudii.tcpviewer",
   "name": "Omarchy TCPViewer",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "author": "fonsgaudii",
   "license": "GPL-2.0-or-later",
-  "description": "TCP Viewer for Omarchy: live packet capture status and quick access to the TCPViewer app. A Linux port of Proxyman's TCP Viewer.",
+  "description": "Capture status in the bar and quick access to the Linux port of Proxyman's TCP Viewer.",
   "kinds": ["bar-widget", "panel"],
+  "keepLoaded": false,
   "entryPoints": {
-    "barWidget": "qml/BarWidget.qml",
-    "panel": "qml/Panel.qml"
+    "barWidget": "plugin/qml/BarWidget.qml",
+    "panel": "plugin/qml/Panel.qml"
   },
   "barWidget": {
     "displayName": "TCPViewer",
+    "description": "Capture engine status and quick access to the TCPViewer panel",
     "category": "Network",
     "allowMultiple": false,
     "defaultSection": "right"
-  },
-  "keepLoaded": false
+  }
 }
