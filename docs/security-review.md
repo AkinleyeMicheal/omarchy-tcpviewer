@@ -73,8 +73,9 @@ fuzzing was performed in this pass.
   aids. They are same-user environment variables, not a security boundary, and
   should not be exposed to untrusted processes.
 - **Live capture capabilities are lost on relink.** After rebuilding
-  `tcpviewerd`, re-apply:
-  `sudo setcap cap_net_raw,cap_net_admin+ep daemon/.build/debug/tcpviewerd`.
+  `tcpviewerd`, re-apply (absolute path shown; the relative form works only from
+  the repository root):
+  `sudo setcap cap_net_raw,cap_net_admin+ep "$HOME/Work/omarchy-tcpviewer/daemon/.build/debug/tcpviewerd"`.
   Until then, file viewing works but starting a live capture fails.
 
 ## Reproduce

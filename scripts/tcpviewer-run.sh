@@ -24,6 +24,16 @@ if [[ ! -x "$DAEMON" ]]; then
     exit 1
 fi
 
+# Live capture needs capabilities; relinking the daemon drops them. Surface the
+# exact command once per launch instead of failing silently from a keybinding.
+if command -v getcap >/dev/null 2>&1 && ! getcap "$DAEMON" 2>/dev/null | grep -q 'cap_net_raw'; then
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -a "Omarchy TCPViewer" -t 8000 \
+            "Live capture needs capabilities" \
+            "sudo setcap cap_net_raw,cap_net_admin+ep $DAEMON"
+    fi
+fi
+
 # Start the daemon when it is not already answering on the IPC socket.
 if ! "$CLI" app status >/dev/null 2>&1; then
     nohup "$DAEMON" >/dev/null 2>&1 &

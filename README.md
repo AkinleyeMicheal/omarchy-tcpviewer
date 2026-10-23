@@ -39,10 +39,11 @@ A user-local install is also available:
 - Hyprland binding: `SUPER + SHIFT + T` (see `~/.config/hypr/bindings.lua`)
 
 Live capture needs packet capabilities on the daemon. Re-apply them after every
-relink/rebuild of `tcpviewerd`:
+relink/rebuild of `tcpviewerd` (run this from the repository root, or use the
+absolute path):
 
 ```sh
-sudo setcap cap_net_raw,cap_net_admin+ep daemon/.build/debug/tcpviewerd
+sudo setcap cap_net_raw,cap_net_admin+ep "$PWD/daemon/.build/debug/tcpviewerd"
 ```
 
 Opening capture files works without capabilities.
