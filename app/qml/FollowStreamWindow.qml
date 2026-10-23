@@ -97,6 +97,7 @@ Window {
                 Layout.fillWidth: true
                 visible: window.follow.model.hasStream
                 text: window.follow.model.summaryLabel
+                textFormat: Text.PlainText
                 elide: Text.ElideMiddle
                 font.family: Theme.uiFont
                 font.pixelSize: Theme.uiSize
@@ -270,6 +271,7 @@ Window {
                 visible: !window.follow.loading && window.follow.model.followError !== ""
                 width: Math.min(parent.width - 80, 520)
                 text: window.follow.model.followError
+                textFormat: Text.PlainText
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.Wrap
                 font.family: Theme.uiFont

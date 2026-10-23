@@ -106,8 +106,14 @@ int PacketDetailModel::byteLengthAt(int row) const
     return node ? node->byteLength : 0;
 }
 
-std::shared_ptr<PacketDetailModel::Node> PacketDetailModel::parseNode(const QVariantMap &map)
+std::shared_ptr<PacketDetailModel::Node> PacketDetailModel::parseNode(const QVariantMap &map, int depth)
 {
+    // Bound recursion: the daemon clamps depth to 12, so anything deeper is
+    // malformed/hostile input and must not be able to exhaust the stack.
+    static constexpr int kMaximumDepth = 64;
+    if (depth > kMaximumDepth)
+        return nullptr;
+
     auto node = std::make_shared<Node>();
     node->name = map.value(QStringLiteral("name")).toString();
     node->value = map.value(QStringLiteral("value")).toString();
@@ -125,7 +131,7 @@ std::shared_ptr<PacketDetailModel::Node> PacketDetailModel::parseNode(const QVar
     const QVariantList children = map.value(QStringLiteral("children")).toList();
     node->children.reserve(children.size());
     for (const QVariant &child : children) {
-        if (auto parsed = parseNode(child.toMap()))
+        if (auto parsed = parseNode(child.toMap(), depth + 1))
             node->children.append(std::move(parsed));
     }
     return node;

@@ -160,6 +160,7 @@ Rectangle {
                         anchors.rightMargin: 8
                         anchors.verticalCenter: parent.verticalCenter
                         text: row.value !== "" ? row.name + ": " + row.value : row.name
+                                textFormat: Text.PlainText
                         elide: Text.ElideRight
                         font.family: Theme.monoFont
                         font.pixelSize: Theme.packetFontSize
@@ -229,6 +230,7 @@ Rectangle {
                 width: Math.min(parent.width - 40, 320)
                 visible: root.inspector.error !== ""
                 text: root.inspector.error
+                textFormat: Text.PlainText
                 wrapMode: Text.WordWrap
                 horizontalAlignment: Text.AlignHCenter
                 font.family: Theme.uiFont

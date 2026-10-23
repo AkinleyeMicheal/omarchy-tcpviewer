@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Omarchy TCPViewer
+GenericName=Network Traffic Inspector
+Comment=Live packet capture, filtering, and inspection
+Exec=omarchy-tcpviewer
+Icon=network-wired
+Terminal=false
+Categories=Network;Monitor;Development;
+Keywords=network;packet;capture;tcp;udp;wireshark;
+StartupNotify=true

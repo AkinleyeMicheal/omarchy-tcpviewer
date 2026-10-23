@@ -277,11 +277,12 @@ func renderText(command: String, data: [String: IPCValue]) -> String {
         var out = pad("ID", 14) + pad("ROLE", 12) + pad("STATE", 11) + "ADDRESSES"
         for row in rows {
             guard let obj = row.objectValue else { continue }
-            let id = obj["id"]?.stringValue ?? ""
-            let role = obj["display_name"]?.stringValue ?? ""
-            let state = obj["availability"]?.stringValue ?? ""
+            let id = displaySafe(obj["id"]?.stringValue ?? "")
+            let role = displaySafe(obj["display_name"]?.stringValue ?? "")
+            let state = displaySafe(obj["availability"]?.stringValue ?? "")
             let addresses = (obj["addresses"]?.arrayValue ?? [])
                 .compactMap { $0.objectValue?["value"]?.stringValue ?? $0.stringValue }
+                .map(displaySafe)
                 .joined(separator: ", ")
             out += "\n" + pad(id, 14) + pad(role, 12) + pad(state, 11) + addresses
         }
@@ -295,11 +296,11 @@ func renderText(command: String, data: [String: IPCValue]) -> String {
             out += "\n"
                 + pad(obj["packet_id"]?.stringValue ?? "", 8)
                 + pad(formatTimestamp(obj["timestamp"]?.stringValue), 14)
-                + pad(formatEndpoint(obj["source"]), 24)
-                + pad(formatEndpoint(obj["destination"]), 24)
-                + pad(obj["protocol"]?.stringValue ?? "", 8)
+                + pad(displaySafe(formatEndpoint(obj["source"])), 24)
+                + pad(displaySafe(formatEndpoint(obj["destination"])), 24)
+                + pad(displaySafe(obj["protocol"]?.stringValue ?? ""), 8)
                 + pad(scalarText(obj["length"]), 6)
-                + (obj["info"]?.stringValue ?? "")
+                + displaySafe(obj["info"]?.stringValue ?? "")
         }
         return out
     default:
@@ -332,6 +333,22 @@ func formatTimestamp(_ iso: String?) -> String {
     let display = DateFormatter()
     display.dateFormat = "HH:mm:ss.SSS"
     return display.string(from: date)
+}
+
+/// Render daemon/capture strings safely for a terminal: strip control and
+/// bidirectional formatting scalars so malicious packet data cannot emit
+/// terminal escape sequences or spoof the layout.
+func displaySafe(_ value: String) -> String {
+    var out = String()
+    out.reserveCapacity(value.count)
+    for scalar in value.unicodeScalars {
+        if scalar.properties.generalCategory == .control || scalar.properties.generalCategory == .format {
+            out.append("\u{00B7}")
+        } else {
+            out.unicodeScalars.append(scalar)
+        }
+    }
+    return out
 }
 
 func formatEndpoint(_ value: IPCValue?) -> String {

@@ -304,6 +304,7 @@ ApplicationWindow {
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: window.statusText()
+                textFormat: Text.PlainText
                 font.family: Theme.uiFont
                 font.pixelSize: Theme.uiSmall
                 color: Theme.secondaryLabel
@@ -730,6 +731,7 @@ ApplicationWindow {
                         anchors.rightMargin: 8
                         anchors.verticalCenter: parent.verticalCenter
                         text: controller.errorText
+                textFormat: Text.PlainText
                         elide: Text.ElideRight
                         font.family: Theme.uiFont
                         font.pixelSize: Theme.uiSmall

@@ -203,6 +203,7 @@ Rectangle {
             anchors.rightMargin: 8
             anchors.verticalCenter: parent.verticalCenter
             text: row.title
+            textFormat: Text.PlainText
             elide: Text.ElideMiddle
             font.family: Theme.uiFont
             font.pixelSize: Theme.uiSize

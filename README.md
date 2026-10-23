@@ -14,6 +14,46 @@ Full-fidelity port of TCP Viewer to [Omarchy](https://omarchy.org) (Arch Linux +
 - `packaging/` — install scripts, `setcap` capability setup, AUR packaging
 - `docs/` — design decisions (ADR), porting notes
 
+## Build and run
+
+```sh
+# Daemon (capture + dissection engine)
+cd daemon && swift build
+
+# GUI
+cmake -S app -B app/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build app/build
+```
+
+Launch both with the repo script:
+
+```sh
+scripts/tcpviewer-run.sh
+```
+
+It starts `tcpviewerd` when it is not already answering, then opens the GUI.
+A user-local install is also available:
+
+- `~/.local/bin/omarchy-tcpviewer` → `scripts/tcpviewer-run.sh`
+- `~/.local/share/applications/omarchy-tcpviewer.desktop`
+- Hyprland binding: `SUPER + SHIFT + T` (see `~/.config/hypr/bindings.lua`)
+
+Live capture needs packet capabilities on the daemon. Re-apply them after every
+relink/rebuild of `tcpviewerd`:
+
+```sh
+sudo setcap cap_net_raw,cap_net_admin+ep daemon/.build/debug/tcpviewerd
+```
+
+Opening capture files works without capabilities.
+
+## Security
+
+See [docs/security-review.md](docs/security-review.md). In short: the IPC socket
+is `0700`/`0600` with same-UID peer checks, the app never fetches URLs (no SSRF
+surface), imports are local files only, and capture-derived strings are rendered
+as plain text.
+
 ## License
 
 GPL-2.0-or-later. See [NOTICE](NOTICE) for upstream attribution and third-party components.

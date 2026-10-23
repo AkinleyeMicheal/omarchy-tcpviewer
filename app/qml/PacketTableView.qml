@@ -163,6 +163,7 @@ Item {
                     id: pillLabel
                     anchors.centerIn: parent
                     text: cell.cellText
+                    textFormat: Text.PlainText
                     color: Theme.protocolTint(model.protocol)
                     font.family: Theme.monoFont
                     font.pixelSize: Theme.packetFontSize
@@ -178,6 +179,7 @@ Item {
                 verticalAlignment: Text.AlignVCenter
                 elide: Text.ElideRight
                 text: cell.cellText
+                textFormat: Text.PlainText
                 color: cell.isSummary && model.severity !== 0
                     ? Theme.systemOrange
                     : (cell.isSecondary ? Theme.secondaryLabel : Theme.label)

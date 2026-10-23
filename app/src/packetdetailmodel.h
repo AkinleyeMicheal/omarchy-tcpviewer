@@ -61,7 +61,7 @@ private:
         int depth = 0;
     };
 
-    static std::shared_ptr<Node> parseNode(const QVariantMap &map);
+    static std::shared_ptr<Node> parseNode(const QVariantMap &map, int depth = 0);
     static bool nodeMatches(const Node &node, const QString &needle);
     static bool subtreeMatches(const Node &node, const QString &needle);
     void appendVisible(const Node &node, int depth, const QString &needle);

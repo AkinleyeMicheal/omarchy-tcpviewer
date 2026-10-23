@@ -32,6 +32,7 @@ final class SocketServer: @unchecked Sendable {
         case bindFailed(String)
         case listenFailed(String)
         case notSafeToUnlink(String)
+        case unsafeDirectory(String)
 
         var description: String {
             switch self {
@@ -40,6 +41,7 @@ final class SocketServer: @unchecked Sendable {
             case .bindFailed(let path): return "bind(\(path)): \(String(cString: strerror(errno)))"
             case .listenFailed(let detail): return "listen(): \(detail)"
             case .notSafeToUnlink(let path): return "refusing to replace non-socket at \(path)"
+            case .unsafeDirectory(let path): return "socket directory is not owned by this user: \(path)"
             }
         }
     }
@@ -69,6 +71,12 @@ final class SocketServer: @unchecked Sendable {
         }
         // Tighten even when the dir already existed (XDG_RUNTIME_DIR is 0700,
         // but this dir may have been created by an older/looser build).
+        // Refuse to bind into a directory owned by another user: in a shared
+        // parent that user could replace our socket and impersonate the daemon.
+        var directoryStat = stat()
+        guard stat(directory, &directoryStat) == 0, directoryStat.st_uid == geteuid() else {
+            throw ServerError.unsafeDirectory(directory)
+        }
         chmod(directory, 0o700)
 
         var fileStat = stat()

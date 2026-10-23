@@ -164,12 +164,14 @@ void SessionController::importFiles(const QVariantList &urls)
     QStringList paths;
     for (const QVariant &value : urls) {
         QString path;
-        if (value.canConvert<QUrl>()) {
+        // Distinguish real QUrl values (drag & drop) from plain path strings.
+        // Import is local-files-only: remote URLs are never fetched.
+        if (value.metaType().id() == QMetaType::QUrl) {
             const QUrl url = value.toUrl();
-            path = url.isLocalFile() ? url.toLocalFile() : url.toString();
-        }
-        if (path.isEmpty())
+            path = url.isLocalFile() ? url.toLocalFile() : QString();
+        } else {
             path = value.toString();
+        }
         if (!path.isEmpty())
             paths.append(path);
     }

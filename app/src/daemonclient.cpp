@@ -7,6 +7,13 @@
 #include <QUuid>
 #include <QVariantList>
 
+namespace {
+// Daemon response lines are capped at 16 MiB server-side. Abort a peer that
+// keeps streaming an unterminated line so the client buffer cannot grow
+// without bound.
+constexpr qint64 kMaxReadBufferBytes = 20 * 1024 * 1024;
+} // namespace
+
 DaemonClient::DaemonClient(QObject *parent)
     : QObject(parent)
 {
@@ -15,9 +22,15 @@ DaemonClient::DaemonClient(QObject *parent)
         m_socketPath = override;
     } else {
         const QString runtimeDir = qEnvironmentVariable("XDG_RUNTIME_DIR");
-        m_socketPath = (runtimeDir.isEmpty() ? QStringLiteral("/tmp")
-                                             : runtimeDir)
-                       + QStringLiteral("/omarchy-tcpviewer/tcpviewerd.sock");
+        if (runtimeDir.isEmpty()) {
+            // The daemon refuses to run without a systemd user runtime dir.
+            // Never fall back to a world-writable directory: a foreign user
+            // could replace the socket and impersonate tcpviewerd.
+            setLastError(QStringLiteral("XDG_RUNTIME_DIR is not set."));
+        } else {
+            m_socketPath = runtimeDir
+                + QStringLiteral("/omarchy-tcpviewer/tcpviewerd.sock");
+        }
     }
 
     m_socket = new QLocalSocket(this);
@@ -50,6 +63,12 @@ DaemonClient::DaemonClient(QObject *parent)
             const QByteArray line = m_socket->readLine().trimmed();
             if (!line.isEmpty())
                 handleLine(line);
+        }
+        // Reject unbounded partial lines from a misbehaving socket peer.
+        if (!m_socket->canReadLine() && m_socket->bytesAvailable() > kMaxReadBufferBytes) {
+            setLastError(QStringLiteral("tcpviewerd sent an oversized response."));
+            m_socket->abort();
+            return;
         }
     });
 
@@ -87,6 +106,10 @@ void DaemonClient::start()
         return;
     m_started = true;
     m_timeoutTimer->start();
+    if (m_socketPath.isEmpty()) {
+        setLastError(QStringLiteral("Cannot locate tcpviewerd: XDG_RUNTIME_DIR is not set."));
+        return;
+    }
     m_socket->connectToServer(m_socketPath);
     if (m_socket->state() != QLocalSocket::ConnectedState)
         scheduleReconnect();

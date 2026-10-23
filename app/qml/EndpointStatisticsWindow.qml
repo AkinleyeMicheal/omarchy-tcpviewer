@@ -170,6 +170,7 @@ Window {
                                 height: 22
                                 verticalAlignment: Text.AlignVCenter
                                 rightPadding: 8
+                                textFormat: Text.PlainText
                                 text: {
                                     switch (index) {
                                     case 0: return model.address
