@@ -2,6 +2,7 @@
 
 #include "daemonclient.h"
 #include "packetmodel.h"
+#include "sourcetreemodel.h"
 
 #include <QByteArray>
 #include <QObject>
@@ -19,6 +20,7 @@ class SessionController : public QObject
     QML_ELEMENT
     Q_PROPERTY(DaemonClient *client READ client CONSTANT)
     Q_PROPERTY(PacketListModel *packets READ packets CONSTANT)
+    Q_PROPERTY(SourceTreeModel *sourceTree READ sourceTree CONSTANT)
     Q_PROPERTY(QString selectedPacketID READ selectedPacketID NOTIFY selectedPacketIDChanged)
     // Test hooks for launch behavior (tab count, split panes).
     Q_PROPERTY(bool startupSplit READ startupSplit CONSTANT)
@@ -42,6 +44,7 @@ public:
 
     DaemonClient *client() const { return m_client; }
     PacketListModel *packets() const { return m_packets; }
+    SourceTreeModel *sourceTree() const { return m_sourceTree; }
     QString selectedPacketID() const { return m_selectedPacketID; }
     bool startupSplit() const { return qEnvironmentVariableIsSet("TCPVIEWER_SPLIT"); }
     int startupTabs() const
@@ -84,6 +87,8 @@ public:
     Q_INVOKABLE void clearPackets();
     Q_INVOKABLE void applyFilter(const QString &filter);
     Q_INVOKABLE void setQuickFilters(const QVariantList &quickFilters);
+    Q_INVOKABLE void selectTreeFilter(const QString &nodeId);
+    Q_INVOKABLE void toggleTreeExpanded(const QString &nodeId);
     Q_INVOKABLE void selectPacket(const QString &packetID);
     // Reveal targets the inspector of the main pane (follow-stream reveals).
     Q_INVOKABLE void revealPacket(const QString &packetID);
@@ -121,10 +126,12 @@ private:
     void setLoading(bool loading);
     void setTotalCount(int total);
     void setFilterTextInternal(const QString &filter);
+    void applyTreeSelectHook();
     static PacketRow parseSummary(const QVariantMap &summary);
 
     DaemonClient *m_client = nullptr;
     PacketListModel *m_packets = nullptr;
+    SourceTreeModel *m_sourceTree = nullptr;
     QTimer *m_pollTimer = nullptr;
     QTimer *m_statusTimer = nullptr;
 
@@ -147,4 +154,7 @@ private:
     // CI hook: TCPVIEWER_CAPTURE_IFACE starts live capture after startup.
     QString m_startupCaptureIface;
     bool m_startupCaptureStarted = false;
+    // CI hook: TCPVIEWER_TREE_SELECT selects a source-tree node once it exists.
+    QString m_treeSelectNode;
+    bool m_treeSelectApplied = false;
 };

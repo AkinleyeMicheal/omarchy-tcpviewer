@@ -458,6 +458,14 @@ final class CommandRouter: @unchecked Sendable {
         if let dns = packet.dnsDomainName {
             data["dns_name"] = .string(dns)
         }
+        if let client = packet.client {
+            data["client"] = .object([
+                "pid": .int(Int(client.pid)),
+                "name": .string(client.name),
+                "display_name": .string(client.displayName),
+                "executable_path": client.executablePath.map { .string($0) } ?? .null,
+            ])
+        }
         if full {
             if !packet.layers.isEmpty {
                 data["layers"] = .array(packet.layers.map {
@@ -466,13 +474,6 @@ final class CommandRouter: @unchecked Sendable {
                         "detail": $0.detailSummary.map { .string($0) } ?? .null,
                     ])
                 })
-            }
-            if let client = packet.client {
-                data["client"] = .object([
-                    "pid": .int(Int(client.pid)),
-                    "name": .string(client.name),
-                    "display_name": .string(client.displayName),
-                ])
             }
             if let comment = packet.customComment {
                 data["comment"] = .string(comment)

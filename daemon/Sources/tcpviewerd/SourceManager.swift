@@ -38,6 +38,7 @@ final class SourceManager: @unchecked Sendable {
         let filePath: String?
         let liveSession: (any LiveCaptureSessionProviding)?
         let offlineDocument: (any OfflineCaptureDocumentProviding)?
+        let enricher: PacketMetadataEnricher
         var phase: String
         var statusMessage: String?
         var summaries: [PacketSummary] = []
@@ -80,6 +81,11 @@ final class SourceManager: @unchecked Sendable {
             self.interfaceID = interfaceID
             self.filePath = filePath
             self.phase = phase
+            self.enricher = PacketMetadataEnricher(resolveClients: kind == .live)
+            if kind == .live {
+                // Scan /proc before capture starts; later refreshes are async.
+                self.enricher.prime()
+            }
         }
 
         // MARK: Session facade (one source = exactly one of the two kinds)
@@ -593,15 +599,16 @@ final class SourceManager: @unchecked Sendable {
             // streaming open; the completion supplies the final list.
             if source.kind == .offline && !source.isOfflineLoading { return }
 
+            let enriched = source.enricher.enrich(packets)
             switch disposition {
             case .replace:
-                source.summaries = packets
+                source.summaries = enriched
                 source.resetIndexes()
             case .append:
-                guard !packets.isEmpty else { return }
-                source.summaries.append(contentsOf: packets)
+                guard !enriched.isEmpty else { return }
+                source.summaries.append(contentsOf: enriched)
                 // Append-path rule: only NEW ids join the indexes.
-                scheduleTailEvaluation(for: source, newCount: packets.count)
+                scheduleTailEvaluation(for: source, newCount: enriched.count)
             }
 
         case .packetSummaryUpdates(let updates):

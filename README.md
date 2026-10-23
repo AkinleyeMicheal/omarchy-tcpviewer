@@ -72,6 +72,16 @@ assigned Left and Right. The window compares:
 diffs are capped at 2000 lines per side; byte diffs trim the common prefix and
 suffix before highlighting, so length changes do not mark every later byte.
 
+## Source tree and app attribution
+
+The sidebar mirrors upstream's packet-source tree: **All Packets → Apps** and
+**Domains**, with domains and IP addresses grouped under each app. Live captures
+resolve local TCP/UDP sockets to processes through `/proc` and show the owning
+app in the Client column; offline files still populate the domain tree from
+captured DNS/SNI data. Clicking a node filters the loaded packets locally.
+Counts cover the rows currently loaded in the table, so a display filter narrows
+both the table and the tree counts.
+
 ## Security
 
 See [docs/security-review.md](docs/security-review.md). In short: the IPC socket

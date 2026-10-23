@@ -29,14 +29,19 @@ SessionController::SessionController(QObject *parent)
     : QObject(parent)
     , m_client(new DaemonClient(this))
     , m_packets(new PacketListModel(this))
+    , m_sourceTree(new SourceTreeModel(this))
 {
     connect(m_client, &DaemonClient::connectedChanged, this, &SessionController::handleConnectedChanged);
     connect(m_client, &DaemonClient::response, this, &SessionController::handleResponse);
     connect(m_client, &DaemonClient::failure, this, &SessionController::handleFailure);
     connect(m_client, &DaemonClient::event, this, &SessionController::handleEvent);
+    connect(m_sourceTree, &SourceTreeModel::countChanged,
+            this, &SessionController::applyTreeSelectHook);
 
-    // CI hook: start a live capture once interfaces are known.
+    // CI hooks: start a live capture once interfaces are known, and select a
+    // source-tree node after its first matching packet batch arrives.
     m_startupCaptureIface = qEnvironmentVariable("TCPVIEWER_CAPTURE_IFACE");
+    m_treeSelectNode = qEnvironmentVariable("TCPVIEWER_TREE_SELECT");
 
     m_pollTimer = new QTimer(this);
     m_pollTimer->setInterval(100);
@@ -216,7 +221,10 @@ void SessionController::selectSourceInternal(const QString &sourceID)
     emit totalCountChanged();
 
     if (sourceID.isEmpty()) {
+        m_packets->clearTreeFilter();
+        m_sourceTree->reset();
         m_packets->clear();
+        m_treeSelectApplied = false;
         setLoading(false);
         return;
     }
@@ -261,6 +269,37 @@ void SessionController::setQuickFilters(const QVariantList &quickFilters)
     resetStream();
 }
 
+void SessionController::selectTreeFilter(const QString &nodeId)
+{
+    const PacketTreeFilter filter = m_sourceTree->filterForNode(nodeId);
+    if (!filter.valid)
+        return;
+
+    clearSelection();
+    m_sourceTree->selectNode(nodeId);
+    if (filter.active) {
+        m_packets->setTreeFilter(filter.appKey, filter.domainKey, filter.ip,
+                                 filter.appsOnly, filter.missingDomain);
+    } else {
+        m_packets->clearTreeFilter();
+    }
+}
+
+void SessionController::toggleTreeExpanded(const QString &nodeId)
+{
+    m_sourceTree->toggleExpanded(nodeId);
+}
+
+void SessionController::applyTreeSelectHook()
+{
+    if (m_treeSelectNode.isEmpty() || m_treeSelectApplied)
+        return;
+    if (m_sourceTree->filterForNode(m_treeSelectNode).valid) {
+        selectTreeFilter(m_treeSelectNode);
+        m_treeSelectApplied = true;
+    }
+}
+
 void SessionController::selectPacket(const QString &packetID)
 {
     if (packetID.isEmpty()) {
@@ -297,7 +336,11 @@ void SessionController::clearSelection()
 
 void SessionController::resetStream()
 {
+    // The table is rebuilt from the daemon, so the local tree scope starts over.
+    m_packets->clearTreeFilter();
+    m_sourceTree->reset();
     m_packets->clear();
+    m_treeSelectApplied = false;
     m_lastPacketID = 0;
     m_requestInFlight = false;
     if (m_currentSourceID.isEmpty()) {
@@ -450,9 +493,14 @@ void SessionController::handlePackets(const QVariantMap &data)
     for (const QVariant &value : summaries)
         rows.append(parseSummary(value.toMap()));
 
+    // The sidebar is an app-layer aggregate of the loaded packet summaries
+    // (upstream PacketSourceListService), so it follows every loaded page.
+    m_sourceTree->appendRows(rows);
     m_packets->appendRows(rows);
     if (m_packets->lastPacketID() > m_lastPacketID)
         m_lastPacketID = m_packets->lastPacketID();
+
+    applyTreeSelectHook();
 
     // CI/screenshot hook: always inspect this packet number once rows exist.
     const QString autoSelect = qEnvironmentVariable("TCPVIEWER_SELECT_PACKET");
@@ -554,10 +602,28 @@ void SessionController::setLoading(bool loading)
 
 void SessionController::setTotalCount(int total)
 {
-    if (m_totalCount == total)
-        return;
+    const bool totalChanged = m_totalCount != total;
     m_totalCount = total;
-    emit totalCountChanged();
+
+    // Keep the selected source row's badge live without re-querying the full
+    // source list on every packet page.
+    bool sourceCountChanged = false;
+    for (int i = 0; i < m_sources.size(); ++i) {
+        QVariantMap source = m_sources.at(i).toMap();
+        if (source.value(QStringLiteral("source_id")).toString() != m_currentSourceID)
+            continue;
+        if (source.value(QStringLiteral("packet_count")).toInt() != total) {
+            source.insert(QStringLiteral("packet_count"), total);
+            m_sources[i] = source;
+            sourceCountChanged = true;
+        }
+        break;
+    }
+
+    if (totalChanged)
+        emit totalCountChanged();
+    if (sourceCountChanged)
+        emit sourcesChanged();
 }
 
 void SessionController::setFilterTextInternal(const QString &filter)
@@ -608,6 +674,11 @@ PacketRow SessionController::parseSummary(const QVariantMap &summary)
         row.client = clientMap.value(QStringLiteral("display_name")).toString();
         if (row.client.isEmpty())
             row.client = clientMap.value(QStringLiteral("name")).toString();
+        // Prefer the executable path as the stable app identity; display names
+        // can collide (multiple Python tools, helper processes, etc.).
+        row.clientKey = clientMap.value(QStringLiteral("executable_path")).toString().trimmed();
+        if (row.clientKey.isEmpty())
+            row.clientKey = row.client.trimmed();
     }
 
     row.domain = summary.value(QStringLiteral("sni")).toString();

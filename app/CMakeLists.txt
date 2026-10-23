@@ -13,6 +13,7 @@ qt_policy(SET QTP0001 NEW)
 qt_add_executable(omarchy-tcpviewer
     src/main.cpp
     src/packetmodel.cpp
+    src/sourcetreemodel.cpp
     src/packetdetailmodel.cpp
     src/hexview.cpp
     src/followstreammodel.cpp
@@ -63,6 +64,7 @@ qt_add_qml_module(omarchy-tcpviewer
         qml/DiffWindow.qml
     SOURCES
         src/packetmodel.h
+        src/sourcetreemodel.h
         src/packetdetailmodel.h
         src/hexview.h
         src/followstreammodel.h
@@ -87,4 +89,13 @@ if(TCPVIEWER_BUILD_TESTS)
     target_include_directories(diffalgorithms_test PRIVATE src)
     target_link_libraries(diffalgorithms_test PRIVATE Qt6::Test)
     add_test(NAME diffalgorithms COMMAND diffalgorithms_test)
+
+    qt_add_executable(sourcetreemodel_test
+        tests/sourcetreemodel_test.cpp
+        src/packetmodel.cpp
+        src/sourcetreemodel.cpp
+    )
+    target_include_directories(sourcetreemodel_test PRIVATE src)
+    target_link_libraries(sourcetreemodel_test PRIVATE Qt6::Test Qt6::Qml)
+    add_test(NAME sourcetreemodel COMMAND sourcetreemodel_test)
 endif()

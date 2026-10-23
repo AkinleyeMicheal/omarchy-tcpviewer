@@ -29,6 +29,8 @@ fuzzing was performed in this pass.
 | Low | CLI `--output text` printed packet-derived strings raw, allowing terminal escape/bidi injection from a malicious capture (e.g. OSC 52 clipboard writes). | `displaySafe()` replaces Unicode control and format characters before printing. | `daemon/Sources/tcpviewer-cli/main.swift` |
 | Low | Detail-tree parsing recursed without a depth limit; a malformed/hostile daemon response could exhaust the GUI stack. | Depth capped at 64 (daemon clamps to 12). | `app/src/packetdetailmodel.{h,cpp}` |
 | Info | Import accepted non-local URLs and passed them through as literal path strings. | Local files only: real `QUrl` values must be `file:` URLs; strings are paths; the daemon independently requires an absolute path and a capture extension. | `app/src/sessioncontroller.cpp` |
+| Low | Source-tree rows are built from packet-derived app/domain/IP strings and can grow with hostile traffic. | Bounded apps (10k), domains (50k), IPs (50k), children per app (5k), and flat rows (200k); titles are plain text; counts are numeric. | `app/src/sourcetreemodel.cpp` |
+| Low | Port-only client attribution could pick an arbitrary owner when `SO_REUSEPORT` is in use. | Port fallback is only used when exactly one PID owns the port; exact socket/endpoint matches take precedence. | `daemon/Sources/PcapPlusPlusCore/Services/Enrichment/PacketClientResolver.swift` |
 
 ## Verified controls
 
@@ -38,7 +40,19 @@ fuzzing was performed in this pass.
   IPC transport). The only sockets are the `AF_UNIX` IPC endpoints. Imports are local
   files only, and the daemon's import validator requires an absolute path to an
   existing regular `.pcap`/`.pcapng`/`.cap` file. Nothing in the UI can make the
-  daemon fetch a URL.
+  daemon fetch a URL. DNS enrichment only *observes* DNS records already present
+  in the capture; it never resolves a name, sends a query, or contacts an address.
+- **Client attribution is local and read-only.** `/proc/net/{tcp,tcp6,udp,udp6}`
+  and `/proc/<pid>/{comm,exe,fd}` are read as the unprivileged daemon user. The
+  resolver never follows arbitrary symlinks: it reads `/proc/<pid>/exe` and
+  `/proc/<pid>/fd/*` link targets, and ignores targets that are not
+  `socket:[inode]`. Scanning is capped at 200k file descriptors; process names
+  and paths are capped at 128/1024 characters. Attribution is display metadata
+  only and is never used for authorization.
+- **DNS cache is bounded and passive.** Observed domains are limited to 253
+  bytes; IPs are canonicalized with `inet_pton`/`inet_ntop`; the cache holds at
+  most 50k IPs, four domains per IP, and 24h retention, with FIFO eviction.
+  DNS-derived names are rendered as plain text.
 - **IPC hardening.** Directory `0700`, socket `0600`, `SO_PEERCRED` same-UID
   enforcement on accept, 1 MiB request / 16 MiB response caps, line-delimited
   JSON, refusal to replace a non-socket path, serial per-connection queues, and
@@ -72,10 +86,23 @@ fuzzing was performed in this pass.
   the daemon (by design). The socket permissions keep other users out.
 - **Import size is not capped.** Opening an enormous local capture can exhaust
   memory (availability only; user-initiated).
-- **`TCPVIEWER_*` environment hooks** (open files, select packet/detail,
-  screenshots, follow, statistics, split/tabs, socket override) are debug/CI
-  aids. They are same-user environment variables, not a security boundary, and
-  should not be exposed to untrusted processes.
+- **Client attribution can be influenced by crafted packets.** The resolver
+  matches packet endpoints against local sockets; an attacker who can inject
+  traffic that looks like a local flow can make the UI display a misleading app
+  or direction. This is presentation-only and must not be used as an
+  authorization signal.
+- **Process metadata is visible to the same user.** The GUI shows process
+  display names in the Client column/tree; executable paths are used as app
+  identities and sent only to the same-user GUI. This is the same information
+  the user can read from `/proc`; it is not written to the daemon log or
+  persisted by the app.
+- **Tree rows are capped.** Under pathological captures with very many
+  apps/domains/IPs, the flat tree omits rows beyond the caps rather than
+  exhausting memory. Counts may exceed the sum of visible children.
+- **`TCPVIEWER_*` environment hooks** (open files, select packet/detail/tree
+  node, screenshots, follow, statistics, split/tabs, socket override) are
+  debug/CI aids. They are same-user environment variables, not a security
+  boundary, and should not be exposed to untrusted processes.
 - **Live capture capabilities are lost on relink.** After rebuilding
   `tcpviewerd`, re-apply (absolute path shown; the relative form works only from
   the repository root):
