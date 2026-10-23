@@ -53,6 +53,10 @@ fuzzing was performed in this pass.
 - **Privileges.** No setuid binaries. The daemon's only elevated capabilities
   are `cap_net_raw,cap_net_admin`, used for live capture; the GUI and CLI are
   unprivileged.
+- **Diagnostics.** The launcher writes daemon stdout/stderr to
+  `~/.local/state/omarchy-tcpviewer/daemon.log`, rotated at 1 MiB. The state
+  directory is `0700` and the log is created `0600`; it contains startup and
+  capture errors, not packet payloads.
 - **Dependencies.** The app links Qt Quick/Controls plus QtNetwork for
   `QLocalSocket` only; no QtWebEngine. The plugin currently has a manifest but
   no runtime code.
@@ -76,7 +80,9 @@ fuzzing was performed in this pass.
   `tcpviewerd`, re-apply (absolute path shown; the relative form works only from
   the repository root):
   `sudo setcap cap_net_raw,cap_net_admin+ep "$HOME/Work/omarchy-tcpviewer/daemon/.build/debug/tcpviewerd"`.
-  Until then, file viewing works but starting a live capture fails.
+  Until then, file viewing works but starting a live capture fails. The
+  launcher restarts a daemon that predates the `setcap` call so the new
+  capabilities take effect.
 
 ## Reproduce
 

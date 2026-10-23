@@ -473,9 +473,21 @@ void SessionController::handlePackets(const QVariantMap &data)
 void SessionController::handleFailure(const QString &command, const QString &code, const QString &message)
 {
     m_requestInFlight = false;
+    Q_UNUSED(command)
+
+    // A daemon restart drops every source. Recover by clearing the stale
+    // selection instead of leaving a permanent "unknown source" banner.
+    if (code == QStringLiteral("not_found")
+        && message.startsWith(QStringLiteral("unknown source"))) {
+        setLoading(false);
+        setError(QString());
+        if (!m_currentSourceID.isEmpty())
+            selectSourceInternal(QString());
+        refreshSources();
+        return;
+    }
 
     // Inspector failures stay scoped to the inspector; the table keeps working.
-    Q_UNUSED(code)
     setLoading(false);
     setError(message);
 }

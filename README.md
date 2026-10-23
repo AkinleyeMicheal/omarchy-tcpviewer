@@ -46,7 +46,18 @@ absolute path):
 sudo setcap cap_net_raw,cap_net_admin+ep "$PWD/daemon/.build/debug/tcpviewerd"
 ```
 
-Opening capture files works without capabilities.
+Opening capture files works without capabilities. The launcher also restarts a
+running `tcpviewerd` that predates the `setcap` call, because file capabilities
+only take effect when a process starts. Daemon output goes to
+`~/.local/state/omarchy-tcpviewer/daemon.log` (rotated at 1 MiB).
+
+If live capture still reports `CAP_NET_RAW may be required`, restart the daemon
+explicitly and retry:
+
+```sh
+pkill -x tcpviewerd
+scripts/tcpviewer-run.sh
+```
 
 ## Diff
 
