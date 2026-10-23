@@ -26,6 +26,150 @@ ApplicationWindow {
     // Focused workspace routes inspector fetches (per-pane selection state).
     property string focusedPaneID: "0:0"
 
+    Action { id: openpcapAction; shortcut: "Ctrl+O"; onTriggered: openDialog.open() }
+    Action { id: newTabAction; shortcut: "Ctrl+T"; onTriggered: window.newTab() }
+    Action { id: closeTabAction; shortcut: "Ctrl+W"; onTriggered: window.closeActiveTab() }
+    Action { id: quitAction; shortcut: "Ctrl+Q"; onTriggered: Qt.quit() }
+    Action { id: focusFilterAction; shortcut: "Ctrl+F"; onTriggered: window.focusDisplayFilter() }
+    Action { id: focusInspectorFilterAction; shortcut: "Ctrl+Alt+F"; onTriggered: window.focusInspectorFilter() }
+    Action { id: focusSidebarFilterAction; shortcut: "Ctrl+Shift+F"; onTriggered: sidebar.focusFilter() }
+    Action { id: clearPacketsAction; shortcut: "Ctrl+K"; onTriggered: session.clearPackets() }
+    Action { id: showSidebarAction; shortcut: "Ctrl+B"; onTriggered: window.toggleSidebar() }
+    Action { id: showInspectorAction; shortcut: "Ctrl+Shift+I"; onTriggered: window.toggleInspector() }
+    Action { id: endpointsStatsAction; shortcut: "Ctrl+Shift+S"; onTriggered: statsWindow.openAndRaise() }
+    Action { id: openDiffAction; shortcut: "Ctrl+Alt+Y"; onTriggered: diffWindow.openAndRaise() }
+    Action { id: addSelectedDiffAction; shortcut: "Ctrl+Y"; onTriggered: window.addSelectedToDiff() }
+
+    menuBar: MenuBar {
+        id: menuBar
+
+        Menu {
+            title: qsTr("&File")
+            MenuItem {
+                text: qsTr("New Tab")
+                action: newTabAction
+            }
+            MenuItem {
+                text: qsTr("Open…")
+                action: openpcapAction
+            }
+            MenuItem {
+                text: qsTr("Close")
+                action: closeTabAction
+            }
+            MenuSeparator {}
+            MenuItem {
+                text: qsTr("Export as pcap…")
+                enabled: session.currentSourceID !== ""
+                onTriggered: exportPcapDialog.open()
+            }
+            MenuItem {
+                text: qsTr("Export as pcapng…")
+                enabled: session.currentSourceID !== ""
+                onTriggered: exportPcapngDialog.open()
+            }
+            MenuItem {
+                text: qsTr("Export Session…")
+                enabled: session.currentSourceID !== ""
+                onTriggered: exportSessionDialog.open()
+            }
+            MenuSeparator {}
+            MenuItem {
+                text: qsTr("Quit TCP Viewer")
+                action: quitAction
+            }
+        }
+
+        Menu {
+            title: qsTr("&Edit")
+            MenuItem {
+                text: qsTr("Filter")
+                action: focusFilterAction
+            }
+            MenuSeparator {}
+            MenuItem {
+                text: qsTr("Clear All Packets")
+                action: clearPacketsAction
+            }
+        }
+
+        Menu {
+            title: qsTr("&View")
+            MenuItem {
+                text: qsTr("Focus Sidebar Filter")
+                action: focusSidebarFilterAction
+            }
+            MenuItem {
+                text: qsTr("Focus Packet Detail Filter")
+                action: focusInspectorFilterAction
+            }
+            MenuSeparator {}
+            MenuItem {
+                text: qsTr("Show Sidebar")
+                action: showSidebarAction
+            }
+            MenuItem {
+                text: qsTr("Show Inspector")
+                action: showInspectorAction
+            }
+            MenuItem {
+                text: qsTr("Toggle Split View")
+                onTriggered: window.toggleSplitView()
+            }
+        }
+
+        Menu {
+            title: qsTr("&Tools")
+            MenuItem {
+                text: qsTr("Follow TCP Stream")
+                enabled: session.selectedPacketID !== ""
+                onTriggered: follow.follow(session.selectedPacketID)
+            }
+        }
+
+        Menu {
+            title: qsTr("&Statistics")
+            MenuItem {
+                text: qsTr("Endpoints…")
+                action: endpointsStatsAction
+            }
+        }
+
+        Menu {
+            title: qsTr("&Diff")
+            MenuItem {
+                text: qsTr("Open Diff View…")
+                action: openDiffAction
+            }
+            MenuItem {
+                text: qsTr("Add Selected Items to Diff Pool…")
+                action: addSelectedDiffAction
+            }
+        }
+    }
+    function activeWorkspace() {
+        var tab = tabsRepeater.itemAt(activeTab)
+        return tab ? tab.firstPane : null
+    }
+
+    function focusDisplayFilter() {
+        var pane = activeWorkspace()
+        if (pane)
+            pane.focusDisplayFilter()
+    }
+
+    function focusInspectorFilter() {
+        var pane = activeWorkspace()
+        if (pane) {
+            inspectorVisible = true
+            pane.focusInspectorFilter()
+        }
+    }
+
+    function toggleSidebar() { sidebarVisible = !sidebarVisible }
+    function toggleInspector() { inspectorVisible = !inspectorVisible }
+    function toggleSplitView() { toggleSplit() }
+
     function newTab() {
         // Upstream: ⌘T adds a workspace tab. Tabs share the current source in
         // this port; each tab keeps its own panes, selection and inspector.
@@ -510,6 +654,33 @@ ApplicationWindow {
         onAccepted: session.importFiles(selectedFiles)
     }
 
+    FileDialog {
+        id: exportPcapDialog
+        title: "Export as pcap"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "pcap"
+        nameFilters: ["pcap (*.pcap)"]
+        onAccepted: session.exportAll(fileDialogPath(selectedFile), "pcap")
+    }
+
+    FileDialog {
+        id: exportPcapngDialog
+        title: "Export as pcapng"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "pcapng"
+        nameFilters: ["pcapng (*.pcapng)"]
+        onAccepted: session.exportAll(fileDialogPath(selectedFile), "pcapng")
+    }
+
+    FileDialog {
+        id: exportSessionDialog
+        title: "Export Session"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "tcpviewersession"
+        nameFilters: ["TCPViewer session (*.tcpviewersession)"]
+        onAccepted: session.exportSession(fileDialogPath(selectedFile))
+    }
+
     // Bench + dialog helpers: inline components resolve document ids
     // unreliably, so they reach these through window properties/functions.
     readonly property bool benchEnabled: bench.enabled
@@ -518,6 +689,13 @@ ApplicationWindow {
 
     function openContextMenu(index, globalX, globalY) {
         rowContextMenu.openFor(index, globalX, globalY)
+    }
+
+    function fileDialogPath(file) {
+        const value = String(file)
+        if (value.startsWith("file://"))
+            return decodeURIComponent(value.slice("file://".length))
+        return value
     }
 
     // Upstream Diff menu (⌘Y): snapshot the selected packet into the pool.
@@ -587,31 +765,6 @@ ApplicationWindow {
                 diffWindow.openAndRaise()
             }
         }
-    }
-
-    Shortcut {
-        sequences: ["Ctrl+O"]
-        onActivated: openDialog.open()
-    }
-
-    Shortcut {
-        sequences: ["Ctrl+T"]
-        onActivated: window.newTab()
-    }
-
-    Shortcut {
-        sequences: ["Ctrl+W"]
-        onActivated: window.closeActiveTab()
-    }
-
-    Shortcut {
-        sequences: ["Ctrl+Shift+S"]
-        onActivated: statsWindow.openAndRaise()
-    }
-
-    Shortcut {
-        sequences: ["Ctrl+Y"]
-        onActivated: window.addSelectedToDiff()
     }
 
     // Diff window (upstream DiffWindowController).
@@ -731,6 +884,14 @@ ApplicationWindow {
             window.focusedPaneID = workspace.paneID
         }
 
+        function focusDisplayFilter() {
+            quickFilter.focusDisplayFilter()
+        }
+
+        function focusInspectorFilter() {
+            paneInspectorView.focusFilter()
+        }
+
         function presentPacket(packetID) {
             focusPane()
             controller.selectPacket(packetID)
@@ -839,6 +1000,8 @@ ApplicationWindow {
                         id: paneTable
                         anchors.fill: parent
                         model: session.packets
+                        columnLayout: session.columnLayout
+                        customColumns: session.customColumns
                         follow: true
                         visible: (!window.benchEnabled || workspace.isPrimary)
                             && (window.benchEnabled ? window.benchView === "table" : (controller.packets.count > 0))
@@ -905,7 +1068,9 @@ ApplicationWindow {
 
             // Inspector (pane-owned detail + hex state) ----------------------
             Inspector {
+                id: paneInspectorView
                 inspector: paneInspector
+                session: controller
                 visible: window.inspectorVisible && !window.benchEnabled
                 SplitView.preferredWidth: window.inspectorPlacement === "trailing" ? 360 : 0
                 SplitView.minimumWidth: window.inspectorPlacement === "trailing" ? 240 : 0

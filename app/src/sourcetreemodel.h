@@ -30,6 +30,7 @@ class SourceTreeModel : public QAbstractListModel
     QML_ELEMENT
     Q_PROPERTY(int count READ count NOTIFY countChanged)
     Q_PROPERTY(QString selectedNodeId READ selectedNodeId NOTIFY selectedNodeIdChanged)
+    Q_PROPERTY(QString filterText READ filterText WRITE setFilterText NOTIFY filterTextChanged)
 
 public:
     enum Role {
@@ -65,10 +66,13 @@ public:
 
     int count() const { return m_nodes.size(); }
     QString selectedNodeId() const { return m_selectedNodeId; }
+    QString filterText() const { return m_filterText; }
+    void setFilterText(const QString &text);
 
 signals:
     void countChanged();
     void selectedNodeIdChanged();
+    void filterTextChanged();
 
 private:
     struct Node {
@@ -121,4 +125,7 @@ private:
     int m_totalPackets = 0;
     int m_packetsWithClient = 0;
     int m_packetsWithoutDomain = 0;
+    QString m_filterText;
+
+    void filterNodes(QVector<Node> &nodes) const;
 };

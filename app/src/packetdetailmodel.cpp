@@ -106,6 +106,18 @@ int PacketDetailModel::byteLengthAt(int row) const
     return node ? node->byteLength : 0;
 }
 
+QString PacketDetailModel::fieldNameAt(int row) const
+{
+    const Node *node = visibleNode(row);
+    return node ? node->fieldName : QString();
+}
+
+QString PacketDetailModel::valueAt(int row) const
+{
+    const Node *node = visibleNode(row);
+    return node ? node->value : QString();
+}
+
 std::shared_ptr<PacketDetailModel::Node> PacketDetailModel::parseNode(const QVariantMap &map, int depth)
 {
     // Bound recursion: the daemon clamps depth to 12, so anything deeper is

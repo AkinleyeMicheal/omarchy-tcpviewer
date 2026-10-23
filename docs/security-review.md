@@ -64,6 +64,9 @@ fuzzing was performed in this pass.
   `overwrite`.
 - **Rendering.** Hex view bounds-checks every row; QML shows capture strings as
   plain text; the CLI sanitizes control/format characters.
+- **Column metadata is bounded.** User-added protocol columns are length-capped
+  field names/titles, serialized only into the user's own Qt settings file, and
+  resolved lazily with a bounded request queue and cache.
 - **Privileges.** No setuid binaries. The daemon's only elevated capabilities
   are `cap_net_raw,cap_net_admin`, used for live capture; the GUI and CLI are
   unprivileged.

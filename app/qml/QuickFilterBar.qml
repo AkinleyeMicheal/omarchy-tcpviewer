@@ -28,6 +28,11 @@ Rectangle {
         { id: "errors", label: "Errors" }
     ]
 
+    function focusDisplayFilter() {
+        filterField.forceActiveFocus()
+        filterField.selectAll()
+    }
+
     function toggleChip(id) {
         if (id === "all") {
             selectedIDs = []

@@ -466,6 +466,12 @@ final class CommandRouter: @unchecked Sendable {
                 "executable_path": client.executablePath.map { .string($0) } ?? .null,
             ])
         }
+        // Comments must populate in the base summary too: the app's table has
+        // a Comment column that reads the list payload, not packets.details.
+        // Use the resolved comment so imported pcapng comments show as well.
+        if let comment = packet.resolvedComment {
+            data["comment"] = .string(comment)
+        }
         if full {
             if !packet.layers.isEmpty {
                 data["layers"] = .array(packet.layers.map {
@@ -474,9 +480,6 @@ final class CommandRouter: @unchecked Sendable {
                         "detail": $0.detailSummary.map { .string($0) } ?? .null,
                     ])
                 })
-            }
-            if let comment = packet.customComment {
-                data["comment"] = .string(comment)
             }
         }
         return .object(data)

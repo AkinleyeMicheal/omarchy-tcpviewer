@@ -41,6 +41,9 @@ public:
     Q_INVOKABLE void setFilterText(const QString &text);
     Q_INVOKABLE int byteOffsetAt(int row) const;
     Q_INVOKABLE int byteLengthAt(int row) const;
+    // Context-menu helpers for "Create Column" (upstream inspector menu).
+    Q_INVOKABLE QString fieldNameAt(int row) const;
+    Q_INVOKABLE QString valueAt(int row) const;
 
 private:
     struct Node {

@@ -38,6 +38,10 @@ signals:
     void connectedChanged();
     void response(const QString &command, const QVariantMap &data);
     void failure(const QString &command, const QString &code, const QString &message);
+    // Request-scoped failure for callers that may have abandoned a request
+    // (custom columns) and must not consume another request's error.
+    void requestFailure(const QString &requestID, const QString &command,
+                        const QString &code, const QString &message);
     void event(const QString &name, const QVariantMap &data);
     void lastErrorChanged();
 

@@ -93,8 +93,9 @@ DaemonClient::DaemonClient(QObject *parent)
         }
         for (const QString &id : expired) {
             const Pending pending = m_pending.take(id);
-            emit failure(pending.command, QStringLiteral("timeout"),
-                         QStringLiteral("No response from tcpviewerd within the timeout."));
+            const QString message = QStringLiteral("No response from tcpviewerd within the timeout.");
+            emit failure(pending.command, QStringLiteral("timeout"), message);
+            emit requestFailure(id, pending.command, QStringLiteral("timeout"), message);
         }
     });
     m_clock.start();
@@ -198,9 +199,11 @@ void DaemonClient::handleLine(const QByteArray &line)
     }
 
     const QJsonObject error = object.value(QStringLiteral("error")).toObject();
-    emit failure(command,
-                 error.value(QStringLiteral("code")).toString(QStringLiteral("unknown")),
-                 error.value(QStringLiteral("message")).toString(QStringLiteral("Unknown daemon error.")));
+    const QString code = error.value(QStringLiteral("code")).toString(QStringLiteral("unknown"));
+    const QString message = error.value(QStringLiteral("message"))
+        .toString(QStringLiteral("Unknown daemon error."));
+    emit failure(command, code, message);
+    emit requestFailure(requestID, command, code, message);
 }
 
 void DaemonClient::setLastError(const QString &message)

@@ -10,6 +10,8 @@ Item {
     id: root
 
     required property PacketListModel model
+    required property PacketColumnLayout columnLayout
+    required property PacketCustomColumns customColumns
     property bool follow: true
     property int selectedIndex: -1
 
@@ -17,14 +19,8 @@ Item {
     signal rowActivated(int index)
     signal rowContextClicked(int index, real globalX, real globalY)
 
-    readonly property var columns: {
-        var result = []
-        for (var i = 0; i < Theme.columns.length; ++i) {
-            if (Theme.columns[i].visible)
-                result.push(Theme.columns[i])
-        }
-        return result
-    }
+    readonly property var columns: columnLayout.columns
+    readonly property int customRevision: customColumns.revision
 
     readonly property var offsets: {
         var result = []
@@ -64,12 +60,21 @@ Item {
         case "decodeStatus": return item.decodeStatus
         case "sourceKind": return item.sourceKind
         case "tcpPayloadLength": return String(item.tcpPayloadLength)
+        case "deltaTime": return item.deltaTime
+        case "streamDeltaTime": return item.streamDeltaTime
+        case "clientPid": return item.clientPid > 0 ? String(item.clientPid) : ""
+        case "bundleIdentifier": return item.bundleIdentifier
+        case "comment": return item.comment
+        case "tags": return item.tags
         default: return ""
         }
     }
 
     Component.onCompleted: root.model.setColumnCount(root.columns.length)
-    onColumnsChanged: root.model.setColumnCount(root.columns.length)
+    onColumnsChanged: {
+        root.model.setColumnCount(root.columns.length)
+        table.forceLayout()
+    }
 
     Rectangle {
         id: header
@@ -77,6 +82,18 @@ Item {
         width: parent.width
         height: 24
         color: Theme.headerBackground
+        clip: true
+
+        // Header context menu (upstream PacketTableColumnVisibilityMenuController).
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.RightButton
+            onClicked: (mouse) => {
+                columnMenu.x = Math.min(mouse.x, Math.max(0, root.width - columnMenu.width))
+                columnMenu.y = header.height
+                columnMenu.open()
+            }
+        }
 
         Repeater {
             model: root.columns
@@ -94,6 +111,7 @@ Item {
                     verticalAlignment: Text.AlignVCenter
                     elide: Text.ElideRight
                     text: modelData.title
+                    textFormat: Text.PlainText
                     color: Theme.secondaryLabel
                     font.family: Theme.uiFont
                     font.pixelSize: Theme.uiSmall
@@ -107,6 +125,25 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     color: Theme.separator
                 }
+
+                // Drag the divider to resize; the layout persists the width.
+                MouseArea {
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: 5
+                    cursorShape: Qt.SplitHCursor
+                    acceptedButtons: Qt.LeftButton
+                    property real startWidth: 0
+
+                    onPressed: startWidth = modelData.width
+                    onReleased: (mouse) => {
+                        root.columnLayout.setColumnWidth(
+                            modelData.id,
+                            Math.max(modelData.minimumWidth, startWidth + mouse.x))
+                    }
+                    onDoubleClicked: root.columnLayout.resetColumnWidth(modelData.id)
+                }
             }
         }
 
@@ -116,6 +153,30 @@ Item {
             anchors.bottom: parent.bottom
             height: 1
             color: Theme.separator
+        }
+    }
+
+    Menu {
+        id: columnMenu
+        width: 240
+
+        Repeater {
+            model: root.columnLayout.menuEntries
+            delegate: MenuItem {
+                required property var modelData
+                text: modelData.title
+                checkable: true
+                checked: modelData.visible
+                enabled: modelData.enabled
+                onTriggered: root.columnLayout.toggleColumn(modelData.id)
+            }
+        }
+
+        MenuSeparator {}
+
+        MenuItem {
+            text: qsTr("Reset All Columns")
+            onTriggered: root.columnLayout.resetColumns()
         }
     }
 
@@ -141,10 +202,19 @@ Item {
             required property var model
 
             readonly property var columnData: root.columns[column]
-            readonly property bool isProtocol: columnData.role === "protocol"
-            readonly property string cellText: root.readRole(model, columnData.role)
-            readonly property bool isSecondary: Theme.isSecondary(columnData.role)
-            readonly property bool isSummary: columnData.role === "summary"
+            readonly property bool isCustom: columnData && columnData.custom === true
+            readonly property bool isProtocol: !isCustom && columnData.role === "protocol"
+            readonly property string cellText: {
+                if (isCustom) {
+                    // Reading the revision keeps reused delegates bound to
+                    // lazily resolved detail-field values.
+                    root.customRevision
+                    return root.customColumns.value(columnData.id, model.packetId)
+                }
+                return root.readRole(model, columnData.role)
+            }
+            readonly property bool isSecondary: !isCustom && Theme.isSecondary(columnData.role)
+            readonly property bool isSummary: !isCustom && columnData.role === "summary"
 
             implicitHeight: Theme.packetRowHeight
             color: row === root.selectedIndex

@@ -1,10 +1,13 @@
 #pragma once
 
 #include "daemonclient.h"
+#include "packetcolumnlayout.h"
+#include "packetcustomcolumns.h"
 #include "packetmodel.h"
 #include "sourcetreemodel.h"
 
 #include <QByteArray>
+#include <QHash>
 #include <QObject>
 #include <QVariantList>
 #include <QVariantMap>
@@ -21,6 +24,8 @@ class SessionController : public QObject
     Q_PROPERTY(DaemonClient *client READ client CONSTANT)
     Q_PROPERTY(PacketListModel *packets READ packets CONSTANT)
     Q_PROPERTY(SourceTreeModel *sourceTree READ sourceTree CONSTANT)
+    Q_PROPERTY(PacketColumnLayout *columnLayout READ columnLayout CONSTANT)
+    Q_PROPERTY(PacketCustomColumns *customColumns READ customColumns CONSTANT)
     Q_PROPERTY(QString selectedPacketID READ selectedPacketID NOTIFY selectedPacketIDChanged)
     // Test hooks for launch behavior (tab count, split panes).
     Q_PROPERTY(bool startupSplit READ startupSplit CONSTANT)
@@ -45,6 +50,8 @@ public:
     DaemonClient *client() const { return m_client; }
     PacketListModel *packets() const { return m_packets; }
     SourceTreeModel *sourceTree() const { return m_sourceTree; }
+    PacketColumnLayout *columnLayout() const { return m_columnLayout; }
+    PacketCustomColumns *customColumns() const { return m_customColumns; }
     QString selectedPacketID() const { return m_selectedPacketID; }
     bool startupSplit() const { return qEnvironmentVariableIsSet("TCPVIEWER_SPLIT"); }
     int startupTabs() const
@@ -94,6 +101,13 @@ public:
     Q_INVOKABLE void revealPacket(const QString &packetID);
     Q_INVOKABLE void clearSelection();
     Q_INVOKABLE void clearError();
+    // Create a packet-table column from a protocol detail field. The sample
+    // value belongs to the packet the user right-clicked in the inspector.
+    Q_INVOKABLE QString createCustomColumn(const QString &fieldName, const QString &title,
+                                           const QString &sampleValue, const QString &packetID);
+    Q_INVOKABLE void exportAll(const QString &path, const QString &format);
+    Q_INVOKABLE void exportSelected(const QString &path, const QString &format);
+    Q_INVOKABLE void exportSession(const QString &path);
 
 signals:
     void interfacesChanged();
@@ -110,6 +124,7 @@ signals:
     // Emitted by revealPacket for the follow-window reveal flow.
     void revealRequested(const QString &packetID);
     void sourceOpened(const QString &sourceID);
+    void exportFinished(const QString &path, int packetCount);
 
 private:
     void handleConnectedChanged();
@@ -132,6 +147,8 @@ private:
     DaemonClient *m_client = nullptr;
     PacketListModel *m_packets = nullptr;
     SourceTreeModel *m_sourceTree = nullptr;
+    PacketColumnLayout *m_columnLayout = nullptr;
+    PacketCustomColumns *m_customColumns = nullptr;
     QTimer *m_pollTimer = nullptr;
     QTimer *m_statusTimer = nullptr;
 
@@ -148,6 +165,8 @@ private:
     bool m_requestInFlight = false;
     int m_totalCount = 0;
     quint64 m_lastPacketID = 0;
+    qint64 m_lastPacketTimestamp = 0;
+    QHash<QString, qint64> m_lastStreamTimestamp;
     int m_pageSize = 5000;
     QStringList m_pendingOpenFiles;
     QString m_selectedPacketID;

@@ -23,6 +23,11 @@ Rectangle {
         return String(source.kind || "")
     }
 
+    function focusFilter() {
+        filterField.forceActiveFocus()
+        filterField.selectAll()
+    }
+
     function glyphFor(kind) {
         switch (String(kind)) {
         case "all": return "◉"
@@ -55,7 +60,10 @@ Rectangle {
 
     ListView {
         id: treeList
-        anchors.fill: parent
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: filterArea.top
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         model: root.session.sourceTree
@@ -158,6 +166,48 @@ Rectangle {
                 font.pixelSize: Theme.uiSize
                 color: Theme.secondaryLabel
                 opacity: 0.75
+            }
+        }
+    }
+
+    // Upstream sidebar has a filter field pinned to the bottom of the tree.
+    Rectangle {
+        id: filterArea
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        height: 34
+        color: parent.color
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: 6
+            radius: 6
+            color: Theme.windowBackground
+            border.width: 1
+            border.color: filterField.activeFocus ? Theme.accent : Theme.separator
+        }
+
+        TextField {
+            id: filterField
+            anchors.fill: parent
+            anchors.leftMargin: 8
+            anchors.rightMargin: 8
+            background: null
+            padding: 0
+            verticalAlignment: TextInput.AlignVCenter
+            placeholderText: "Filter"
+            placeholderTextColor: Theme.secondaryLabel
+            color: Theme.label
+            selectionColor: Theme.accent
+            selectedTextColor: "white"
+            font.family: Theme.monoFont
+            font.pixelSize: Theme.uiSmall
+            selectByMouse: true
+            onTextChanged: {
+                const value = text
+                treeList.positionViewAtBeginning()
+                root.session.sourceTree.filterText = value
             }
         }
     }

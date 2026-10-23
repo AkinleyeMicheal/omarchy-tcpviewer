@@ -36,6 +36,7 @@ struct PacketRow {
     QString client;
     // Stable app identity used by the source tree (executable path first).
     QString clientKey;
+    int clientPid = 0;
     QString domain;
     QString streamId;
     QString summary;
@@ -44,6 +45,10 @@ struct PacketRow {
     QString interfaceName;
     QString decodeStatus;
     QString sourceKind;
+    QString deltaTime;
+    QString streamDeltaTime;
+    QString comment;
+    qint64 timestampMs = 0;
     int length = 0;
     int originalLength = 0; // on-wire size; statistics use it, fallback mimics length
     int tcpPayloadLength = 0;
@@ -81,6 +86,12 @@ public:
         DecodeStatusRole,
         SourceKindRole,
         TcpPayloadRole,
+        ClientPidRole,
+        DeltaTimeRole,
+        StreamDeltaRole,
+        BundleIdentifierRole,
+        CommentRole,
+        TagsRole,
     };
     Q_ENUM(Role)
 

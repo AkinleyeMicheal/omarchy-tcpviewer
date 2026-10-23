@@ -8,6 +8,7 @@ Rectangle {
     id: root
 
     required property PacketInspector inspector
+    required property SessionController session
 
     color: Theme.contentBackground
 
@@ -19,6 +20,29 @@ Rectangle {
         if (kind === "message")
             return Theme.secondaryLabel
         return byteOffset >= 0 ? Theme.label : Theme.secondaryLabel
+    }
+
+    function focusFilter() {
+        inspectorFilter.forceActiveFocus()
+        inspectorFilter.selectAll()
+    }
+
+    Menu {
+        id: detailContextMenu
+        property string fieldName: ""
+        property string itemName: ""
+        property string itemValue: ""
+
+        MenuItem {
+            text: qsTr("Create Column")
+            enabled: detailContextMenu.fieldName !== ""
+                     && root.inspector.packetID !== ""
+            onTriggered: root.session.createCustomColumn(
+                detailContextMenu.fieldName,
+                detailContextMenu.itemName,
+                detailContextMenu.itemValue,
+                root.inspector.packetID)
+        }
     }
 
     Rectangle {
@@ -175,8 +199,19 @@ Rectangle {
                         anchors.fill: parent
                         anchors.leftMargin: row.indent + 14
                         hoverEnabled: true
-                        acceptedButtons: Qt.LeftButton
-                        onClicked: tree.currentIndex = row.index
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onClicked: (mouse) => {
+                            tree.currentIndex = row.index
+                            if (mouse.button === Qt.RightButton) {
+                                detailContextMenu.fieldName = root.inspector.detailModel.fieldNameAt(row.index)
+                                detailContextMenu.itemName = row.name
+                                detailContextMenu.itemValue = row.value
+                                const menuPoint = mouse.mapToItem(root, mouse.x, mouse.y)
+                                detailContextMenu.x = menuPoint.x
+                                detailContextMenu.y = menuPoint.y
+                                detailContextMenu.open()
+                            }
+                        }
                         onDoubleClicked: {
                             if (row.hasChildren)
                                 root.inspector.detailModel.toggleExpanded(row.index)

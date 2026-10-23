@@ -59,6 +59,20 @@ pkill -x tcpviewerd
 scripts/tcpviewer-run.sh
 ```
 
+## Menus and columns
+
+Common actions are reachable from the menu bar and keyboard:
+
+- `Ctrl+F` focuses the display filter, `Ctrl+Alt+F` focuses the packet-detail
+  filter, and `Ctrl+Shift+F` focuses the sidebar tree filter.
+- `Ctrl+K` clears packets, `Ctrl+B` toggles the sidebar, `Ctrl+Shift+I` toggles
+  the inspector, and `Ctrl+Shift+S` opens endpoint statistics.
+- The header row's right-click menu shows/hides table columns and resets widths,
+  and widths persist across launches.
+- Right-clicking a protocol-detail row in the inspector offers **Create Column**,
+  which adds a bounded table column backed by that field. Values are resolved
+  lazily from the packet-detail tree and cached.
+
 ## Diff
 
 Select a packet and press `Ctrl+Y` (or right-click → Diff Selected Packet) to

@@ -224,9 +224,62 @@ QString SourceTreeModel::appTitle(const PacketRow &row)
     return title.left(128);
 }
 
+void SourceTreeModel::setFilterText(const QString &text)
+{
+    const QString trimmed = text.trimmed();
+    if (trimmed == m_filterText)
+        return;
+
+    m_filterText = trimmed;
+    emit filterTextChanged();
+    rebuildNow();
+}
+
+void SourceTreeModel::filterNodes(QVector<Node> &nodes) const
+{
+    if (m_filterText.isEmpty())
+        return;
+
+    // Match on text/ids; keep matched nodes and all ancestors so matching
+    // subtrees stay navigable.
+    QHash<QString, bool> includeFromDescendants;
+    QVector<bool> matchNode(nodes.size(), false);
+    for (int i = 0; i < nodes.size(); ++i) {
+        const Node &node = nodes.at(i);
+        matchNode[i] = node.id == QStringLiteral("all")
+            || node.title.contains(m_filterText, Qt::CaseInsensitive)
+            || node.id.contains(m_filterText, Qt::CaseInsensitive)
+            || node.ip.contains(m_filterText, Qt::CaseInsensitive)
+            || node.appKey.contains(m_filterText, Qt::CaseInsensitive);
+    }
+
+    // Mark nodes to keep: keep if the node itself matches, or if any
+    // descendant below it is kept.
+    for (int i = nodes.size() - 1; i >= 0; --i) {
+        const Node &node = nodes.at(i);
+        const bool includeNode = matchNode.at(i)
+            || includeFromDescendants.value(node.id, false);
+        includeFromDescendants.insert(node.id, includeNode);
+        if (!node.parentId.isEmpty()) {
+            const bool includeParent = includeFromDescendants.value(node.parentId, false);
+            includeFromDescendants.insert(node.parentId, includeNode || includeParent);
+        }
+    }
+
+    QVector<Node> filtered;
+    filtered.reserve(nodes.size());
+    for (int i = 0; i < nodes.size(); ++i) {
+        if (includeFromDescendants.value(nodes.at(i).id, matchNode.at(i)))
+            filtered.append(nodes.at(i));
+    }
+    nodes = std::move(filtered);
+}
+
 void SourceTreeModel::rebuildNow()
 {
     m_rebuildTimer.stop();
+
+    const bool filterActive = !m_filterText.isEmpty();
 
     QVector<Node> nodes;
     nodes.reserve(m_apps.size() + m_domainCounts.size() + m_ipCounts.size() + 4);
@@ -250,7 +303,7 @@ void SourceTreeModel::rebuildNow()
         apps.kind = QStringLiteral("group");
         apps.count = m_packetsWithClient;
         apps.hasChildren = true;
-        apps.expanded = m_expanded.contains(appsId);
+        apps.expanded = filterActive || m_expanded.contains(appsId);
         appendNode(apps);
 
         // Insertion order matches upstream's orderedAppBuckets and keeps live
@@ -270,7 +323,7 @@ void SourceTreeModel::rebuildNow()
             appNode.count = app.count;
             appNode.depth = 1;
             appNode.hasChildren = !app.domainCounts.isEmpty();
-            appNode.expanded = m_expanded.contains(appId);
+            appNode.expanded = filterActive || m_expanded.contains(appId);
             appendNode(appNode);
 
             if (!appNode.expanded)
@@ -290,7 +343,7 @@ void SourceTreeModel::rebuildNow()
                 domainNode.count = app.domainCounts.value(domainKey);
                 domainNode.depth = 2;
                 domainNode.hasChildren = domainNode.missingDomain && !app.ipCounts.isEmpty();
-                domainNode.expanded = m_expanded.contains(domainId);
+                domainNode.expanded = filterActive || m_expanded.contains(domainId);
                 appendNode(domainNode);
 
                 if (!domainNode.expanded || !domainNode.hasChildren)
@@ -321,7 +374,7 @@ void SourceTreeModel::rebuildNow()
         domains.kind = QStringLiteral("group");
         domains.count = m_totalPackets;
         domains.hasChildren = !m_domainCounts.isEmpty();
-        domains.expanded = m_expanded.contains(domainsId);
+        domains.expanded = filterActive || m_expanded.contains(domainsId);
         appendNode(domains);
 
         if (domains.expanded) {
@@ -337,7 +390,7 @@ void SourceTreeModel::rebuildNow()
                 domainNode.count = m_domainCounts.value(domainKey);
                 domainNode.depth = 1;
                 domainNode.hasChildren = domainNode.missingDomain && !m_ipCounts.isEmpty();
-                domainNode.expanded = m_expanded.contains(domainId);
+                domainNode.expanded = filterActive || m_expanded.contains(domainId);
                 appendNode(domainNode);
 
                 if (!domainNode.expanded || !domainNode.hasChildren)
@@ -358,6 +411,8 @@ void SourceTreeModel::rebuildNow()
             }
         }
     }
+
+    filterNodes(nodes);
 
     bool sameStructure = nodes.size() == m_nodes.size();
     if (sameStructure) {

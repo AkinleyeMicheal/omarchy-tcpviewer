@@ -80,6 +80,18 @@ QVariant PacketListModel::data(const QModelIndex &index, int role) const
         return row.sourceKind;
     case TcpPayloadRole:
         return row.tcpPayloadLength;
+    case ClientPidRole:
+        return row.clientPid > 0 ? QVariant(row.clientPid) : QVariant();
+    case DeltaTimeRole:
+        return row.deltaTime;
+    case StreamDeltaRole:
+        return row.streamDeltaTime;
+    case BundleIdentifierRole:
+        return row.clientKey;
+    case CommentRole:
+        return row.comment;
+    case TagsRole:
+        return QString();
     default:
         return {};
     }
@@ -109,6 +121,12 @@ QHash<int, QByteArray> PacketListModel::roleNames() const
         {DecodeStatusRole, "decodeStatus"},
         {SourceKindRole, "sourceKind"},
         {TcpPayloadRole, "tcpPayloadLength"},
+        {ClientPidRole, "clientPid"},
+        {DeltaTimeRole, "deltaTime"},
+        {StreamDeltaRole, "streamDeltaTime"},
+        {BundleIdentifierRole, "bundleIdentifier"},
+        {CommentRole, "comment"},
+        {TagsRole, "tags"},
     };
 }
 

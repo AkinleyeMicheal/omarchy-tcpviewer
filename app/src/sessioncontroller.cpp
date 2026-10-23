@@ -4,11 +4,19 @@
 #include <QTimer>
 #include <QUrl>
 
-#include <QDateTime>
-#include <QTimer>
-#include <QUrl>
-
 namespace {
+
+QString formatDelta(qint64 milliseconds)
+{
+    if (milliseconds <= 0)
+        return {};
+    const double seconds = double(milliseconds) / 1000.0;
+    if (seconds < 1.0)
+        return QString::number(seconds, 'f', 6);
+    if (seconds < 60.0)
+        return QString::number(seconds, 'f', 3);
+    return QString::number(seconds, 'f', 2);
+}
 
 QString endpointAddress(const QVariantMap &endpoint)
 {
@@ -30,7 +38,17 @@ SessionController::SessionController(QObject *parent)
     , m_client(new DaemonClient(this))
     , m_packets(new PacketListModel(this))
     , m_sourceTree(new SourceTreeModel(this))
+    , m_columnLayout(new PacketColumnLayout(this))
+    , m_customColumns(new PacketCustomColumns(this))
 {
+    const QVariantList customColumns = m_columnLayout->customColumns();
+    for (const QVariant &value : customColumns) {
+        const QVariantMap column = value.toMap();
+        m_customColumns->registerColumn(
+            column.value(QStringLiteral("id")).toString(),
+            column.value(QStringLiteral("fieldName")).toString());
+    }
+
     connect(m_client, &DaemonClient::connectedChanged, this, &SessionController::handleConnectedChanged);
     connect(m_client, &DaemonClient::response, this, &SessionController::handleResponse);
     connect(m_client, &DaemonClient::failure, this, &SessionController::handleFailure);
@@ -212,9 +230,12 @@ void SessionController::selectSourceInternal(const QString &sourceID)
 {
     clearSelection();
     m_currentSourceID = sourceID;
+    m_customColumns->setSourceID(sourceID);
     m_status.clear();
     m_totalCount = 0;
     m_lastPacketID = 0;
+    m_lastPacketTimestamp = 0;
+    m_lastStreamTimestamp.clear();
     m_requestInFlight = false;
     emit currentSourceChanged();
     emit statusChanged();
@@ -342,6 +363,8 @@ void SessionController::resetStream()
     m_packets->clear();
     m_treeSelectApplied = false;
     m_lastPacketID = 0;
+    m_lastPacketTimestamp = 0;
+    m_lastStreamTimestamp.clear();
     m_requestInFlight = false;
     if (m_currentSourceID.isEmpty()) {
         setLoading(false);
@@ -376,6 +399,15 @@ void SessionController::requestPackets(bool firstPage)
 
 void SessionController::handleResponse(const QString &command, const QVariantMap &data)
 {
+    if (command == QStringLiteral("file.export")
+        || command == QStringLiteral("file.export_session")) {
+        setLoading(false);
+        setError(QString());
+        emit exportFinished(data.value(QStringLiteral("path")).toString(),
+                            data.value(QStringLiteral("packet_count")).toInt());
+        return;
+    }
+
     if (command == QStringLiteral("interfaces.list")) {
         m_interfaces = data.value(QStringLiteral("interfaces")).toList();
         if (m_selectedInterface.isEmpty()) {
@@ -469,6 +501,7 @@ void SessionController::handleResponse(const QString &command, const QVariantMap
 
     if (command == QStringLiteral("packets.clear")) {
         clearSelection();
+        m_customColumns->clear();
         resetStream();
         return;
     }
@@ -492,6 +525,21 @@ void SessionController::handlePackets(const QVariantMap &data)
     rows.reserve(summaries.size());
     for (const QVariant &value : summaries)
         rows.append(parseSummary(value.toMap()));
+
+    // Upstream's Delta Time and Stream Delta columns are presentation values
+    // derived from the capture order, not fields in the daemon summary.
+    for (PacketRow &row : rows) {
+        if (row.timestampMs > 0 && m_lastPacketTimestamp > 0)
+            row.deltaTime = formatDelta(row.timestampMs - m_lastPacketTimestamp);
+        if (!row.streamId.isEmpty() && row.timestampMs > 0) {
+            const auto previous = m_lastStreamTimestamp.constFind(row.streamId);
+            if (previous != m_lastStreamTimestamp.cend())
+                row.streamDeltaTime = formatDelta(row.timestampMs - previous.value());
+            m_lastStreamTimestamp.insert(row.streamId, row.timestampMs);
+        }
+        if (row.timestampMs > 0)
+            m_lastPacketTimestamp = row.timestampMs;
+    }
 
     // The sidebar is an app-layer aggregate of the loaded packet summaries
     // (upstream PacketSourceListService), so it follows every loaded page.
@@ -642,6 +690,71 @@ void SessionController::setSelectedInterface(const QString &interfaceID)
     emit selectedInterfaceChanged();
 }
 
+QString SessionController::createCustomColumn(const QString &fieldName, const QString &title,
+                                              const QString &sampleValue, const QString &packetID)
+{
+    const QString identifier = m_columnLayout->createCustomColumn(fieldName, title);
+    if (identifier.isEmpty())
+        return {};
+    m_customColumns->registerColumn(identifier, m_columnLayout->fieldForColumn(identifier));
+    if (!packetID.isEmpty())
+        m_customColumns->setSampleValue(identifier, packetID, sampleValue);
+    return identifier;
+}
+
+void SessionController::exportAll(const QString &path, const QString &format)
+{
+    if (!m_client->connected() || m_currentSourceID.isEmpty() || path.isEmpty())
+        return;
+    if (format != QStringLiteral("pcap") && format != QStringLiteral("pcapng")) {
+        setError(QStringLiteral("Export format must be pcap or pcapng."));
+        return;
+    }
+    setError(QString());
+    setLoading(true);
+    m_client->send(QStringLiteral("file.export"), {
+        {QStringLiteral("source_id"), m_currentSourceID},
+        {QStringLiteral("path"), path},
+        {QStringLiteral("format"), format},
+        {QStringLiteral("all"), true},
+        {QStringLiteral("overwrite"), true},
+    }, 300);
+}
+
+void SessionController::exportSelected(const QString &path, const QString &format)
+{
+    if (!m_client->connected() || m_currentSourceID.isEmpty() || path.isEmpty()
+        || m_selectedPacketID.isEmpty()) {
+        return;
+    }
+    if (format != QStringLiteral("pcap") && format != QStringLiteral("pcapng")) {
+        setError(QStringLiteral("Export format must be pcap or pcapng."));
+        return;
+    }
+    setError(QString());
+    setLoading(true);
+    m_client->send(QStringLiteral("file.export"), {
+        {QStringLiteral("source_id"), m_currentSourceID},
+        {QStringLiteral("path"), path},
+        {QStringLiteral("format"), format},
+        {QStringLiteral("packet_ids"), QVariantList{m_selectedPacketID}},
+        {QStringLiteral("overwrite"), true},
+    }, 300);
+}
+
+void SessionController::exportSession(const QString &path)
+{
+    if (!m_client->connected() || m_currentSourceID.isEmpty() || path.isEmpty())
+        return;
+    setError(QString());
+    setLoading(true);
+    m_client->send(QStringLiteral("file.export_session"), {
+        {QStringLiteral("source_id"), m_currentSourceID},
+        {QStringLiteral("path"), path},
+        {QStringLiteral("overwrite"), true},
+    }, 300);
+}
+
 PacketRow SessionController::parseSummary(const QVariantMap &summary)
 {
     PacketRow row;
@@ -655,6 +768,7 @@ PacketRow SessionController::parseSummary(const QVariantMap &summary)
     row.timeText = dateTime.isValid()
         ? dateTime.toLocalTime().toString(QStringLiteral("HH:mm:ss.zzz"))
         : timestamp;
+    row.timestampMs = dateTime.isValid() ? dateTime.toMSecsSinceEpoch() : 0;
 
     const QVariantMap source = summary.value(QStringLiteral("source")).toMap();
     const QVariantMap destination = summary.value(QStringLiteral("destination")).toMap();
@@ -679,6 +793,7 @@ PacketRow SessionController::parseSummary(const QVariantMap &summary)
         row.clientKey = clientMap.value(QStringLiteral("executable_path")).toString().trimmed();
         if (row.clientKey.isEmpty())
             row.clientKey = row.client.trimmed();
+        row.clientPid = clientMap.value(QStringLiteral("pid")).toInt();
     }
 
     row.domain = summary.value(QStringLiteral("sni")).toString();
@@ -692,6 +807,7 @@ PacketRow SessionController::parseSummary(const QVariantMap &summary)
     row.interfaceName = summary.value(QStringLiteral("interface")).toString();
     row.decodeStatus = summary.value(QStringLiteral("decode_status")).toString();
     row.sourceKind = summary.value(QStringLiteral("source_kind")).toString();
+    row.comment = summary.value(QStringLiteral("comment")).toString();
     row.length = summary.value(QStringLiteral("length")).toInt();
     row.originalLength = summary.value(QStringLiteral("original_length")).toInt();
     row.tcpPayloadLength = summary.value(QStringLiteral("tcp_payload_length")).toInt();

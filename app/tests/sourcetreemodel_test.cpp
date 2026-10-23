@@ -53,6 +53,7 @@ private slots:
     void packetModelFiltering();
     void countOnlyRefreshDoesNotReset();
     void resetClearsTree();
+    void textFilterPreservesAncestors();
 };
 
 void SourceTreeModelTest::countsAndHierarchy()
@@ -94,6 +95,26 @@ void SourceTreeModelTest::countsAndHierarchy()
     tree.toggleExpanded(QStringLiteral("domain:"));
     QCOMPARE(nodeCount(tree, QStringLiteral("ip:10.0.0.2")), 3);
     QCOMPARE(nodeCount(tree, QStringLiteral("ip:8.8.8.8")), 1);
+}
+
+void SourceTreeModelTest::textFilterPreservesAncestors()
+{
+    SourceTreeModel tree;
+    tree.appendRows({
+        makeRow(1, QStringLiteral("curl"), QStringLiteral("/usr/bin/curl"),
+                QStringLiteral("example.com"), QStringLiteral("10.0.0.2"), QStringLiteral("93.184.216.34")),
+        makeRow(2, QStringLiteral("curl"), QStringLiteral("/usr/bin/curl"),
+                QString(), QStringLiteral("10.0.0.2"), QStringLiteral("1.1.1.1")),
+    });
+    tree.rebuildNow();
+    tree.setFilterText(QStringLiteral("example.com"));
+
+    QVERIFY(findNode(tree, QStringLiteral("all")) >= 0);
+    QVERIFY(findNode(tree, QStringLiteral("folder:apps")) >= 0);
+    QVERIFY(findNode(tree, QStringLiteral("app:/usr/bin/curl")) >= 0);
+    QVERIFY(findNode(tree, QStringLiteral("folder:domains")) >= 0);
+    QVERIFY(findNode(tree, QStringLiteral("domain:example.com")) >= 0);
+    QVERIFY(findNode(tree, QStringLiteral("domain:")) < 0);
 }
 
 void SourceTreeModelTest::nodeFilters()
