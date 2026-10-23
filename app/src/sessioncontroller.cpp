@@ -35,6 +35,9 @@ SessionController::SessionController(QObject *parent)
     connect(m_client, &DaemonClient::failure, this, &SessionController::handleFailure);
     connect(m_client, &DaemonClient::event, this, &SessionController::handleEvent);
 
+    // CI hook: start a live capture once interfaces are known.
+    m_startupCaptureIface = qEnvironmentVariable("TCPVIEWER_CAPTURE_IFACE");
+
     m_pollTimer = new QTimer(this);
     m_pollTimer->setInterval(100);
     connect(m_pollTimer, &QTimer::timeout, this, [this]() { requestPackets(false); });
@@ -343,6 +346,10 @@ void SessionController::handleResponse(const QString &command, const QVariantMap
             }
         }
         emit interfacesChanged();
+        if (!m_startupCaptureIface.isEmpty() && !m_startupCaptureStarted) {
+            m_startupCaptureStarted = true;
+            QTimer::singleShot(0, this, [this]() { startCapture(m_startupCaptureIface); });
+        }
         return;
     }
 

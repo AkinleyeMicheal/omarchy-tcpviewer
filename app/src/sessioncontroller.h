@@ -141,4 +141,7 @@ private:
     int m_pageSize = 5000;
     QStringList m_pendingOpenFiles;
     QString m_selectedPacketID;
+    // CI hook: TCPVIEWER_CAPTURE_IFACE starts live capture after startup.
+    QString m_startupCaptureIface;
+    bool m_startupCaptureStarted = false;
 };
