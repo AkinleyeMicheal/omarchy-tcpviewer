@@ -31,7 +31,7 @@ Item {
         id: button
         anchors.fill: parent
         bar: root.bar
-        text: "⇄"
+        text: "↔"
         labelVisible: false
         fontSize: Style.bar.iconFont
         tooltipText: "TCPViewer — status & quick access"
