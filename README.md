@@ -27,8 +27,11 @@ running, muted while it is stopped.
 
 ![Bar widget glyph](docs/plugin-bar.png)
 
-Clicking it toggles the quick access panel — capture status plus
-Launch/Stop/Open actions:
+Clicking it toggles the quick access panel — capture status plus Launch,
+Start live capture, Stop capture and Open project page. The panel is fully
+keyboard-navigable: ↑↓/Tab move, Enter/Space activate, Esc closes, and the
+focused row is inked with the accent border. Both scripts notify when a build
+or capability is missing instead of failing silently.
 
 ![Quick access panel](docs/plugin-panel.png)
 

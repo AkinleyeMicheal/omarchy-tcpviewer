@@ -17,10 +17,20 @@ CLI="$ROOT/daemon/.build/debug/tcpviewer-cli"
 
 if [[ ! -x "$APP" ]]; then
     printf 'omarchy-tcpviewer: build the app first (%s missing)\n' "$APP" >&2
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -a "Omarchy TCPViewer" -t 8000 \
+            "Omarchy TCPViewer is not built yet" \
+            "Inside the plugin clone run:\ncd daemon && swift build\ncmake -S app -B app/build -G Ninja && cmake --build app/build" || true
+    fi
     exit 1
 fi
 if [[ ! -x "$DAEMON" ]]; then
     printf 'omarchy-tcpviewer: build the daemon first (%s missing)\n' "$DAEMON" >&2
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -a "Omarchy TCPViewer" -t 8000 \
+            "tcpviewerd is not built yet" \
+            "Inside the plugin clone run:\ncd daemon && swift build" || true
+    fi
     exit 1
 fi
 
