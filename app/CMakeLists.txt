@@ -54,6 +54,8 @@ qt_add_qml_module(omarchy-tcpviewer
     QML_FILES
         qml/Main.qml
         qml/Theme.qml
+        qml/Overview.qml
+        qml/OverviewFormat.js
         qml/PacketTableListView.qml
         qml/PacketTableView.qml
         qml/Sidebar.qml

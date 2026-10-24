@@ -1,6 +1,7 @@
 #include "sessioncontroller.h"
 
 #include <QDateTime>
+#include <QSettings>
 #include <QTimer>
 #include <QUrl>
 
@@ -41,6 +42,20 @@ SessionController::SessionController(QObject *parent)
     , m_columnLayout(new PacketColumnLayout(this))
     , m_customColumns(new PacketCustomColumns(this))
 {
+    // CI/screenshot hooks (mirroring TCPVIEWER_OPEN_FILES): hide the live
+    // interface controls so captured imagery only shows sanitized data.
+    m_interfacesHidden = qEnvironmentVariableIsSet("TCPVIEWER_HIDE_INTERFACES");
+    // 0 when unset; Main.qml keeps its defaults in that case.
+    m_startupWindowWidth = qEnvironmentVariableIntValue("TCPVIEWER_WINDOW_WIDTH");
+    m_startupWindowHeight = qEnvironmentVariableIntValue("TCPVIEWER_WINDOW_HEIGHT");
+    // The Overview dashboard is the default landing view; TCPVIEWER_CAPTURE
+    // _MODE is the CI/test override knob.
+    m_startupCaptureMode = qEnvironmentVariable("TCPVIEWER_CAPTURE_MODE");
+    if (m_startupCaptureMode.isEmpty())
+        m_startupCaptureMode = QStringLiteral("overview");
+    if (m_startupCaptureMode != QStringLiteral("overview")
+        && m_startupCaptureMode != QStringLiteral("packets"))
+        m_startupCaptureMode = QStringLiteral("overview");
     const QVariantList customColumns = m_columnLayout->customColumns();
     for (const QVariant &value : customColumns) {
         const QVariantMap column = value.toMap();
@@ -119,6 +134,10 @@ void SessionController::handleConnectedChanged()
 
 void SessionController::refreshInterfaces()
 {
+    // CI/screenshot hook: never surface the host's network interfaces in
+    // captured imagery.
+    if (m_interfacesHidden)
+        return;
     if (!m_client->connected())
         return;
     m_client->send(QStringLiteral("interfaces.list"));
@@ -137,6 +156,22 @@ void SessionController::refreshStatus()
         return;
     m_client->send(QStringLiteral("capture.status"),
                    {{QStringLiteral("source_id"), m_currentSourceID}});
+}
+
+void SessionController::requestOverview()
+{
+    if (!m_client->connected())
+        return;
+    // No selection: let the daemon pick its first source so the Overview page
+    // still shows aggregates for a just-opened file.
+    QVariantMap params;
+    if (!m_currentSourceID.isEmpty())
+        params.insert(QStringLiteral("source_id"), m_currentSourceID);
+    if (!m_overviewLoading) {
+        m_overviewLoading = true;
+        emit overviewLoadingChanged();
+    }
+    m_client->send(QStringLiteral("capture.overview"), params);
 }
 
 void SessionController::startCapture(const QString &interfaceID)
@@ -237,6 +272,10 @@ void SessionController::selectSourceInternal(const QString &sourceID)
     m_lastPacketTimestamp = 0;
     m_lastStreamTimestamp.clear();
     m_requestInFlight = false;
+    // A different source has different aggregates; QML refetches on switch.
+    m_overview.clear();
+    m_overviewRevisionKey.clear();
+    emit overviewChanged();
     emit currentSourceChanged();
     emit statusChanged();
     emit totalCountChanged();
@@ -477,6 +516,29 @@ void SessionController::handleResponse(const QString &command, const QVariantMap
         return;
     }
 
+    if (command == QStringLiteral("capture.overview")) {
+        // Skip only same-revision payloads so the charts don't flicker
+        // needlessly; different sources always re-emit.
+        const QString revisionKey = QStringLiteral("%1:%2:%3").arg(
+            data.value(QStringLiteral("source_id")).toString(),
+            data.value(QStringLiteral("revision")).toMap().value(QStringLiteral("count")).toString(),
+            data.value(QStringLiteral("revision")).toMap().value(QStringLiteral("update_seq")).toString());
+        if (m_overviewRevisionKey == revisionKey && !m_overview.isEmpty())
+            return;
+        // Never show another source's aggregates under the current one.
+        const QString sourceID = data.value(QStringLiteral("source_id")).toString();
+        if (!sourceID.isEmpty() && !m_currentSourceID.isEmpty() && sourceID != m_currentSourceID)
+            return;
+        m_overviewRevisionKey = revisionKey;
+        m_overview = data;
+        if (m_overviewLoading) {
+            m_overviewLoading = false;
+            emit overviewLoadingChanged();
+        }
+        emit overviewChanged();
+        return;
+    }
+
     if (command == QStringLiteral("capture.stop")
         || command == QStringLiteral("capture.pause")
         || command == QStringLiteral("capture.resume")) {
@@ -569,7 +631,16 @@ void SessionController::handlePackets(const QVariantMap &data)
 void SessionController::handleFailure(const QString &command, const QString &code, const QString &message)
 {
     m_requestInFlight = false;
-    Q_UNUSED(command)
+
+    // Overview fetches fail silently: the page keeps the last snapshot and
+    // the poller retries, so a momentary daemon hiccup doesn't nag.
+    if (command == QStringLiteral("capture.overview")) {
+        if (m_overviewLoading) {
+            m_overviewLoading = false;
+            emit overviewLoadingChanged();
+        }
+        return;
+    }
 
     // A daemon restart drops every source. Recover by clearing the stale
     // selection instead of leaving a permanent "unknown source" banner.
@@ -812,4 +883,39 @@ PacketRow SessionController::parseSummary(const QVariantMap &summary)
     row.originalLength = summary.value(QStringLiteral("original_length")).toInt();
     row.tcpPayloadLength = summary.value(QStringLiteral("tcp_payload_length")).toInt();
     return row;
+}
+
+// Overview card picker persistence. Unknown or duplicate names (a newer
+// version, hand-edited INI) are skipped, mirroring upstream's
+// CaptureOverviewCardLayoutStore.
+QVariantList SessionController::overviewCards() const
+{
+    QSettings settings;
+    const QStringList names = settings.value(QStringLiteral("overview/cards"))
+                                  .toStringList();
+    static const QStringList known = {
+        QStringLiteral("packets"), QStringLiteral("throughput"),
+        QStringLiteral("protocols"), QStringLiteral("topApps"),
+        QStringLiteral("topDestinations"), QStringLiteral("tcpAnalysis"),
+        QStringLiteral("conversations"), QStringLiteral("services"),
+        QStringLiteral("packetLengths"),
+    };
+    QVariantList result;
+    for (const QString &name : names) {
+        if (known.contains(name) && !result.contains(name))
+            result.append(name);
+    }
+    return result;
+}
+
+void SessionController::setOverviewCards(const QVariantList &cards)
+{
+    QStringList names;
+    for (const QVariant &card : cards) {
+        const QString name = card.toString();
+        if (!name.isEmpty() && !names.contains(name))
+            names.append(name);
+    }
+    QSettings settings;
+    settings.setValue(QStringLiteral("overview/cards"), names);
 }

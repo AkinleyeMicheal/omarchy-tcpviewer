@@ -31,7 +31,7 @@ struct CLIArguments {
 
 // Commands whose group verb form uses two words; everything else one word.
 let twoWordCommands: Set<String> = [
-    "capture.start", "capture.pause", "capture.resume", "capture.stop", "capture.status",
+    "capture.start", "capture.pause", "capture.resume", "capture.stop", "capture.status", "capture.overview",
     "interfaces.list", "sources.list", "source.close",
     "packets.list", "packets.summary", "packets.details", "packets.bytes", "packets.clear",
     "stream.packets", "stream.follow",
@@ -66,6 +66,7 @@ func usage() -> Never {
       app status | interfaces list
       capture status | capture start --interface IFACE [--bpf EXPR]
       capture pause | capture resume | capture stop [--source-id ID]
+      capture overview [--source-id ID]   Overview snapshot for a source
       sources list | source close SOURCE_ID
       packets list [QUERY OPTIONS] | packets summary [QUERY OPTIONS]
       packets details PACKET_ID [--max-depth N] [--max-nodes N]

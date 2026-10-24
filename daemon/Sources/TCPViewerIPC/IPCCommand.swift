@@ -28,6 +28,8 @@ public enum IPCCommand: String, Codable, CaseIterable {
     case capturePause = "capture.pause"
     case captureResume = "capture.resume"
     case captureStop = "capture.stop"
+    // New in the port: GUI Overview page aggregates over the summary buffer.
+    case captureOverview = "capture.overview"
 
     case sourcesList = "sources.list"
     case sourceClose = "source.close"

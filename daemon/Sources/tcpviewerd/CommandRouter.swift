@@ -85,6 +85,11 @@ final class CommandRouter: @unchecked Sendable {
                 respond(result)
             }
 
+        case .captureOverview:
+            manager.captureOverview(sourceID: request.optionalString("source_id")) { result in
+                respond(result)
+            }
+
         case .sourcesList:
             manager.sourcesSnapshot { sources in
                 respond(.success([

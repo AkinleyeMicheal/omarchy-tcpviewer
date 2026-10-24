@@ -18,6 +18,10 @@ ApplicationWindow {
     property bool sidebarVisible: true
     property bool inspectorVisible: true
     property string inspectorPlacement: "trailing"
+    // Workspace mode (upstream NetworkInspectorWorkspaceMode): "packets" or
+    // "overview". TCPVIEWER_CAPTURE_MODE seeds it for CI/screenshot runs; the
+    // seed arrives in onCompleted because sibling ids are not ready before.
+    property string captureMode: "packets"
 
     // Workspace tabs + split panes (upstream TCPViewerWindowController):
     // every tab is a workspace; a tab may show a second side-by-side pane.
@@ -215,8 +219,11 @@ ApplicationWindow {
             return "Connecting to tcpviewerd…"
         if (session.capturing)
             return "Capturing on " + String(session.status.interface || session.selectedInterface || "interface")
-        if (session.currentSourceID !== "")
+        if (session.currentSourceID !== "") {
+            if (session.status.kind === "offline")
+                return session.loading ? "Loading capture…" : "Loaded"
             return session.loading ? "Loading capture…" : "Capture ready"
+        }
         return "Ready"
     }
 
@@ -249,6 +256,7 @@ ApplicationWindow {
                 model: window.interfaceItems
                 textRole: "label"
                 enabled: session.interfaces.length > 0 && !session.capturing
+                visible: !session.interfacesHidden
                 font.family: Theme.uiFont
                 font.pixelSize: Theme.uiSize
 
@@ -363,6 +371,7 @@ ApplicationWindow {
                 width: 76
                 height: 28
                 radius: 6
+                visible: !session.interfacesHidden
                 color: !session.connected
                     ? Theme.separator
                     : (session.capturing ? Theme.systemRed : Theme.accent)
@@ -790,7 +799,12 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
-        // CI/screenshot hooks: workspaces, statistics window, benchmark.
+        // CI/screenshot hooks: workspace mode seed, statistics window, benchmark.
+        window.captureMode = session.startupCaptureMode
+        if (session.startupWindowWidth > 0)
+            window.width = session.startupWindowWidth
+        if (session.startupWindowHeight > 0)
+            window.height = session.startupWindowHeight
         var tabs = session.startupTabs
         if (tabs > window.tabCount)
             window.tabCount = tabs
@@ -939,6 +953,11 @@ ApplicationWindow {
                     anchors.right: parent.right
                     height: Theme.quickFilterHeight
                     session: controller
+                    workspaceMode: window.captureMode
+                    onWorkspaceModeChanged: {
+                        if (window.captureMode !== workspaceMode)
+                            window.captureMode = workspaceMode
+                    }
                 }
 
                 Rectangle {
@@ -1004,6 +1023,7 @@ ApplicationWindow {
                         customColumns: session.customColumns
                         follow: true
                         visible: (!window.benchEnabled || workspace.isPrimary)
+                            && window.captureMode === "packets"
                             && (window.benchEnabled ? window.benchView === "table" : (controller.packets.count > 0))
                         onRowClicked: function(index) {
                             if (window.benchEnabled)
@@ -1025,10 +1045,18 @@ ApplicationWindow {
                         visible: window.benchEnabled && workspace.isPrimary && window.benchView === "list"
                     }
 
+                    Overview {
+                        id: overviewPane
+                        anchors.fill: parent
+                        session: controller
+                        visible: window.captureMode === "overview"
+                    }
+
                     Column {
                         anchors.centerIn: parent
                         spacing: 8
-                        visible: !window.benchEnabled && controller.loading && controller.packets.count === 0
+                        visible: !window.benchEnabled && window.captureMode === "packets"
+                                 && controller.loading && controller.packets.count === 0
 
                         BusyIndicator {
                             anchors.horizontalCenter: parent.horizontalCenter
@@ -1047,7 +1075,8 @@ ApplicationWindow {
 
                     EmptyState {
                         anchors.fill: parent
-                        visible: !window.benchEnabled && controller.packets.count === 0
+                        visible: !window.benchEnabled && window.captureMode === "packets"
+                                 && controller.packets.count === 0
                                  && !controller.loading && controller.currentSourceID === ""
                         onStartCaptureRequested: session.startCapture(session.selectedInterface)
                         onOpenFileRequested: window.openCaptureDialog()
@@ -1055,7 +1084,8 @@ ApplicationWindow {
 
                     EmptyState {
                         anchors.fill: parent
-                        visible: !window.benchEnabled && controller.packets.count === 0
+                        visible: !window.benchEnabled && window.captureMode === "packets"
+                                 && controller.packets.count === 0
                                  && !controller.loading && controller.currentSourceID !== ""
                         glyph: "⌁"
                         title: "No Packets"
@@ -1072,8 +1102,13 @@ ApplicationWindow {
                 inspector: paneInspector
                 session: controller
                 visible: window.inspectorVisible && !window.benchEnabled
-                SplitView.preferredWidth: window.inspectorPlacement === "trailing" ? 360 : 0
-                SplitView.minimumWidth: window.inspectorPlacement === "trailing" ? 240 : 0
+                         && window.captureMode !== "overview"
+                SplitView.preferredWidth: window.inspectorVisible
+                    && window.captureMode !== "overview"
+                    && window.inspectorPlacement === "trailing" ? 360 : 0
+                SplitView.minimumWidth: window.inspectorVisible
+                    && window.captureMode !== "overview"
+                    && window.inspectorPlacement === "trailing" ? 240 : 0
                 SplitView.maximumWidth: window.inspectorPlacement === "trailing" ? 600 : 0
                 SplitView.preferredHeight: window.inspectorPlacement === "bottom" ? 280 : 0
                 SplitView.minimumHeight: window.inspectorPlacement === "bottom" ? 160 : 0

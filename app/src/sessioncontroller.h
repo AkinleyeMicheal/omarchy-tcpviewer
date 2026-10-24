@@ -38,11 +38,23 @@ class SessionController : public QObject
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
     Q_PROPERTY(int totalCount READ totalCount NOTIFY totalCountChanged)
     Q_PROPERTY(QString currentSourceID READ currentSourceID NOTIFY currentSourceChanged)
+    // CI/screenshot hook: which workspace mode ("packets"|"overview") Main
+    // starts in. Overview is the default; TCPVIEWER_CAPTURE_MODE overrides.
+    Q_PROPERTY(QString startupCaptureMode READ startupCaptureMode CONSTANT)
+    // CI/screenshot hook: hide live interface controls (author: privacy).
+    Q_PROPERTY(bool interfacesHidden READ interfacesHidden CONSTANT)
+    // CI/screenshot hook: deterministic window size for captures.
+    Q_PROPERTY(int startupWindowWidth READ startupWindowWidth CONSTANT)
+    Q_PROPERTY(int startupWindowHeight READ startupWindowHeight CONSTANT)
     Q_PROPERTY(QString selectedInterface READ selectedInterface WRITE setSelectedInterface NOTIFY selectedInterfaceChanged)
     Q_PROPERTY(QString filterText READ filterText NOTIFY filterTextChanged)
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorTextChanged)
     Q_PROPERTY(bool loading READ loading NOTIFY loadingChanged)
     Q_PROPERTY(QString capturePhase READ capturePhase NOTIFY statusChanged)
+    // Overview page aggregates from capture.overview; QML refreshes while the
+    // page is visible (the daemon caches per source revision).
+    Q_PROPERTY(QVariantMap overview READ overview NOTIFY overviewChanged)
+    Q_PROPERTY(bool overviewLoading READ overviewLoading NOTIFY overviewLoadingChanged)
 
 public:
     explicit SessionController(QObject *parent = nullptr);
@@ -70,12 +82,18 @@ public:
     bool connected() const;
     int totalCount() const { return m_totalCount; }
     QString currentSourceID() const { return m_currentSourceID; }
+    QString startupCaptureMode() const { return m_startupCaptureMode; }
+    bool interfacesHidden() const { return m_interfacesHidden; }
+    int startupWindowWidth() const { return m_startupWindowWidth; }
+    int startupWindowHeight() const { return m_startupWindowHeight; }
     QString selectedInterface() const { return m_selectedInterface; }
     void setSelectedInterface(const QString &interfaceID);
     QString filterText() const { return m_filterText; }
     QString errorText() const { return m_errorText; }
     bool loading() const { return m_loading; }
     QString capturePhase() const { return m_status.value(QStringLiteral("phase")).toString(); }
+    QVariantMap overview() const { return m_overview; }
+    bool overviewLoading() const { return m_overviewLoading; }
 
     Q_INVOKABLE void start();
     Q_INVOKABLE void refreshInterfaces();
@@ -108,6 +126,10 @@ public:
     Q_INVOKABLE void exportAll(const QString &path, const QString &format);
     Q_INVOKABLE void exportSelected(const QString &path, const QString &format);
     Q_INVOKABLE void exportSession(const QString &path);
+    Q_INVOKABLE void requestOverview();
+    // Overview card picker persistence (upstream TCPViewer.overview.cards).
+    Q_INVOKABLE QVariantList overviewCards() const;
+    Q_INVOKABLE void setOverviewCards(const QVariantList &cards);
 
 signals:
     void interfacesChanged();
@@ -125,6 +147,8 @@ signals:
     void revealRequested(const QString &packetID);
     void sourceOpened(const QString &sourceID);
     void exportFinished(const QString &path, int packetCount);
+    void overviewChanged();
+    void overviewLoadingChanged();
 
 private:
     void handleConnectedChanged();
@@ -155,7 +179,13 @@ private:
     QVariantList m_interfaces;
     QVariantList m_sources;
     QVariantMap m_status;
+    QVariantMap m_overview;
+    QString m_overviewRevisionKey;
     QString m_currentSourceID;
+    QString m_startupCaptureMode;
+    bool m_interfacesHidden = false;
+    int m_startupWindowWidth = 0;
+    int m_startupWindowHeight = 0;
     QString m_selectedInterface;
     QString m_filterText;
     QString m_errorText;
@@ -163,6 +193,7 @@ private:
     QStringList m_quickFilters;
     bool m_loading = false;
     bool m_requestInFlight = false;
+    bool m_overviewLoading = false;
     int m_totalCount = 0;
     quint64 m_lastPacketID = 0;
     qint64 m_lastPacketTimestamp = 0;

@@ -13,6 +13,7 @@
 import Foundation
 import PcapPlusPlusCore
 import TCPViewerIPC
+import TCPViewerOverview
 
 /// Error that already carries a wire error code + client-safe message.
 struct SourceError: Error {
@@ -63,6 +64,12 @@ final class SourceManager: @unchecked Sendable {
         var updateBatches: [(seq: UInt64, ids: [UInt64])] = []
         var updateSeq: UInt64 = 0
         var evictedUpdateSeq: UInt64 = 0
+
+        // Overview cache: last capture.overview payload with the revision it
+        // was computed from. Any ingest (append, metadata, clear) bumps count
+        // or updateSeq, so revision equality is the full validity check.
+        var overviewRevision: (count: Int, updateSeq: UInt64)?
+        var overviewPayload: [String: IPCValue]?
         var lastStateEmit = Date.distantPast
 
         init(
@@ -202,6 +209,8 @@ final class SourceManager: @unchecked Sendable {
             updateBatches = []
             updateSeq = 0
             evictedUpdateSeq = 0
+            overviewRevision = nil
+            overviewPayload = nil
         }
     }
 
@@ -1288,6 +1297,28 @@ final class SourceManager: @unchecked Sendable {
                     completion(.success(self.statusData(for: source)))
                 }
             }
+        }
+    }
+
+    /// Compute (or reuse) the Overview snapshot for one source. Runs a full
+    /// O(n) pass on `queue`; the GUI debounces refetches, so a per-source
+    /// revision cache keeps repeat calls cheap.
+    func captureOverview(
+        sourceID: String?,
+        completion: @escaping (Result<[String: IPCValue], Error>) -> Void
+    ) {
+        queue.async {
+            guard let source = self.resolveSource(id: sourceID, completion: completion) else { return }
+            let revision = (count: source.summaries.count, updateSeq: source.updateSeq)
+            if let cached = source.overviewRevision, let payload = source.overviewPayload,
+               cached.count == revision.count, cached.updateSeq == revision.updateSeq {
+                return completion(.success(payload))
+            }
+            let snapshot = CaptureOverviewBuilder.snapshot(for: source.summaries)
+            let payload = CaptureOverviewIPC.snapshotData(snapshot, sourceID: source.id, revision: revision)
+            source.overviewRevision = revision
+            source.overviewPayload = payload
+            completion(.success(payload))
         }
     }
 }

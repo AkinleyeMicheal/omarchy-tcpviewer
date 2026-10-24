@@ -56,10 +56,19 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
 
+        // Overview page aggregates (charts, top rows, TCP analysis): ported
+        // upstream CaptureOverviewService/Classifier as a recompute-from-
+        // buffer engine, with its schema_version 1 serialization.
+        .target(
+            name: "TCPViewerOverview",
+            dependencies: ["PcapPlusPlusCore", "TCPViewerIPC"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+
         // The daemon: owns capture sources, runs the Unix-socket JSON server.
         .executableTarget(
             name: "tcpviewerd",
-            dependencies: ["PcapPlusPlusCore", "TCPViewerIPC"],
+            dependencies: ["PcapPlusPlusCore", "TCPViewerIPC", "TCPViewerOverview"],
             swiftSettings: [.swiftLanguageMode(.v5)],
             linkerSettings: [
                 .linkedLibrary("wireshark"),
@@ -83,6 +92,23 @@ let package = Package(
             name: "TCPViewerIPCTests",
             dependencies: ["TCPViewerIPC"],
             swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+
+        // Overview engine tests: classifier pins + snapshot math (upstream
+        // parity gate for the charts).
+        .testTarget(
+            name: "TCPViewerOverviewTests",
+            dependencies: ["TCPViewerOverview"],
+            swiftSettings: [.swiftLanguageMode(.v5)],
+            linkerSettings: [
+                .linkedLibrary("wireshark"),
+                .linkedLibrary("wiretap"),
+                .linkedLibrary("wsutil"),
+                .linkedLibrary("glib-2.0"),
+                .linkedLibrary("gobject-2.0"),
+                .linkedLibrary("gmodule-2.0"),
+                .linkedLibrary("pcap"),
+            ]
         ),
 
         // Upstream fixture/core test suite (ported from the macOS Xcode
