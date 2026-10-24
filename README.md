@@ -53,10 +53,12 @@ Opening capture files works without capabilities.
 omarchy plugin remove fonsgaudii.tcpviewer --yes
 ```
 
-The plugin never writes to your Hyprland/Omarchy configuration; settings live
-under `~/.local/state/omarchy-tcpviewer/` (daemon log, QSettings for table
-layouts). Removing the plugin leaves only that directory behind — delete it if
-you want a full cleanup.
+The plugin never writes to your Hyprland/Omarchy configuration; the app
+persists table/card layout in
+`~/.config/omarchy-tcpviewer/Omarchy TCPViewer.conf` (Qt QSettings) and the
+daemon logs to `~/.local/state/omarchy-tcpviewer/daemon.log`. Removing the
+plugin leaves these and the clone's build outputs behind — delete them if you
+want a full cleanup.
 
 ## System packages / external dependencies
 
