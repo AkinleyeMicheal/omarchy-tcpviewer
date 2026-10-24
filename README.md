@@ -21,8 +21,18 @@ omarchy plugin add https://github.com/AkinleyeMicheal/omarchy-tcpviewer
 ```
 
 This clones the repository into the shell's plugin directory and registers
-`fonsgaudii.tcpviewer` (bar widget + quick access panel). Then build the viewer
-once inside the clone so the panel can launch it:
+`fonsgaudii.tcpviewer` (bar widget + quick access panel). The bar widget is a
+single lan-connect glyph: tinted with the accent color while the daemon is
+running, muted while it is stopped.
+
+![Bar widget glyph](docs/plugin-bar.png)
+
+Clicking it toggles the quick access panel — capture status plus
+Launch/Stop/Open actions:
+
+![Quick access panel](docs/plugin-panel.png)
+
+Then build the viewer once inside the clone so the panel can launch it:
 
 ```sh
 # Capture + dissection engine
@@ -34,7 +44,7 @@ cmake --build app/build
 ```
 
 Ongoing use: run `omarchy-shell -q shell toggle fonsgaudii.tcpviewer` (or click
-the ⇄ glyph) for capture status and to launch App; the app itself lives in your
+the bar glyph) for capture status and to launch App; the app itself lives in your
 application menu as **Omarchy TCPViewer** once installed (below).
 
 For live capture, allow the daemon raw-socket access (re-apply after every
