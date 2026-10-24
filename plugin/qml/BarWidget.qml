@@ -5,56 +5,35 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
-// TCPViewer bar leaf: glyph with capture-daemon status dot; click opens the
-// quick access panel. The shell injects `bar`, `moduleName` and `settings`
-// into this root item (Plugin registry contract).
-Item {
+// TCPViewer bar leaf: a recognizable network glyph whose color carries the
+// capture-engine state (accent when tcpviewerd answers, muted otherwise).
+// Click opens the quick access panel. The shell injects `bar`, `moduleName`
+// and `settings` into this root (Plugin registry contract); BarIconButton
+// handles slot sizing, optical glyph bounds and tooltips like first-party
+// widgets. U+F0318 is nf-md-lan_connect from JetBrainsMono Nerd Font.
+BarIconButton {
     id: root
 
-    property var bar: null
     property string moduleName: "fonsgaudii.tcpviewer"
     property var settings: ({})
 
     // True when a tcpviewerd under this user session is running.
     property bool daemonRunning: false
 
-    implicitWidth: button.implicitWidth
-    implicitHeight: button.implicitHeight
+    text: "\uDB80\uDF18"
+    foreground: root.daemonRunning ? Color.accent : Color.muted
+    tooltipText: root.daemonRunning
+        ? "TCPViewer — capture engine running. Click for quick access."
+        : "TCPViewer — capture engine stopped. Click for quick access."
+    onPressed: function(buttonCode) {
+        if (buttonCode === Qt.LeftButton)
+            root.togglePanel()
+    }
 
     function togglePanel() {
         // Public shell IPC: omarchy-shell shell toggle <pluginId>.
         if (root.bar && typeof root.bar.run === "function")
             root.bar.run("omarchy-shell -q shell toggle " + root.moduleName)
-    }
-
-    WidgetButton {
-        id: button
-        anchors.fill: parent
-        bar: root.bar
-        text: "↔"
-        labelVisible: false
-        fontSize: Style.bar.iconFont
-        tooltipText: "TCPViewer — status & quick access"
-        onPressed: function(buttonCode) {
-            if (buttonCode === Qt.LeftButton)
-                root.togglePanel()
-        }
-    }
-
-    // Capture daemon indicator pinned to the glyph corner.
-    Rectangle {
-        width: 7
-        height: 7
-        radius: 3.5
-        anchors.bottom: button.bottom
-        anchors.bottomMargin: 4
-        anchors.right: button.right
-        anchors.rightMargin: 5
-        color: root.daemonRunning
-            ? Color.accent
-            : Util.alpha(Color.foreground, 0.3)
-        border.color: Color.background
-        border.width: 1
     }
 
     Timer {
