@@ -16,6 +16,10 @@ Rectangle {
 
     required property SessionController session
 
+    // The dashboard hands control back to the packet workspace (upstream:
+    // showPacketsFromOverview clears the scope filters and selects All Packets).
+    signal requestMode(string mode)
+
     color: Theme.windowBackground
 
     readonly property var overview: session ? session.overview : ({})
@@ -152,6 +156,15 @@ Rectangle {
                         var name = String(raw).split("/").pop()
                         return status.kind === "offline" ? name : "Live on " + name
                     }
+                }
+
+                // Upstream CaptureOverviewDashboardView header actions: the
+                // dashboard hands control back to the packet table.
+                ToolButton {
+                    text: "View Packets"
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.uiSmall
+                    onClicked: overviewPage.requestMode("packets")
                 }
             }
 

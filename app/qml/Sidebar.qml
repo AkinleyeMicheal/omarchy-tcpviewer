@@ -11,6 +11,12 @@ Rectangle {
 
     required property SessionController session
 
+    // Workspace mode (upstream NetworkInspectorWorkspaceMode): the sidebar's
+    // Capture group owns the Overview navigation row, like upstream's sidebar
+    // where the row carries a workspaceMode.
+    property string captureMode: "packets"
+    signal requestMode(string mode)
+
     color: Theme.dark ? "#232323" : "#f6f6f6"
 
     function basename(path) {
@@ -101,6 +107,14 @@ Rectangle {
 
                 GroupHeader { text: "Capture" }
 
+                // Upstream PacketSourceListService.putItem: the Capture group
+                // leads with the Overview row; selecting it swaps the packet
+                // workspace for the dashboard.
+                OverviewRow {
+                    width: treeList.width
+                    selected: root.captureMode === "overview"
+                }
+
                 Repeater {
                     model: root.liveSources
                     delegate: SourceRow {
@@ -146,7 +160,9 @@ Rectangle {
             depth: model.depth
             expanded: model.expanded
             hasChildren: model.hasChildren
-            selected: model.selected
+            // One highlight at a time (upstream syncSelection()): the
+            // dashboard's nav row owns the selection while it is visible.
+            selected: model.selected && root.captureMode === "packets"
         }
 
         footer: Item {
@@ -287,7 +303,14 @@ Rectangle {
             anchors.fill: parent
             hoverEnabled: true
             acceptedButtons: Qt.LeftButton
-            onClicked: root.session.selectTreeFilter(row.nodeId)
+            // Source-tree rows widen the packet scope; the dashboard hands
+            // control back to the packet workspace (upstream source-list
+            // selection forces workspaceMode .packets).
+            onClicked: {
+                if (root.captureMode === "overview")
+                    root.requestMode("packets")
+                root.session.selectTreeFilter(row.nodeId)
+            }
         }
 
         Item {
@@ -351,6 +374,59 @@ Rectangle {
         }
     }
 
+    // Sidebar navigation row for a workspace mode (upstream rows that carry
+    // a workspaceMode instead of a packet selection).
+    component OverviewRow: Item {
+        id: modeRow
+
+        property bool selected
+
+        readonly property bool hovered: mouse.containsMouse
+        height: Theme.sidebarRowHeight
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.leftMargin: 8
+            anchors.rightMargin: 8
+            radius: 6
+            color: modeRow.selected
+                ? Theme.selection
+                : (modeRow.hovered ? Qt.rgba(Theme.label.r, Theme.label.g, Theme.label.b, 0.06)
+                                   : "transparent")
+        }
+
+        MouseArea {
+            id: mouse
+            anchors.fill: parent
+            hoverEnabled: true
+            acceptedButtons: Qt.LeftButton
+            onClicked: root.requestMode("overview")
+        }
+
+        Text {
+            id: glyph
+            anchors.left: parent.left
+            anchors.leftMargin: 18
+            anchors.verticalCenter: parent.verticalCenter
+            text: "▥"
+            font.family: Theme.uiFont
+            font.pixelSize: 12
+            color: modeRow.selected ? "white" : Theme.systemBlue
+        }
+
+        Text {
+            anchors.left: glyph.right
+            anchors.leftMargin: 8
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Overview"
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            font.family: Theme.uiFont
+            font.pixelSize: Theme.uiSize
+            color: modeRow.selected ? "white" : Theme.label
+        }
+    }
+
     component SourceRow: Item {
         id: row
 
@@ -359,6 +435,7 @@ Rectangle {
         height: Theme.sidebarRowHeight
 
         readonly property bool selected: root.session.currentSourceID === String(source.source_id)
+            && root.captureMode === "packets"
         readonly property bool isLive: String(source.kind) === "live"
         readonly property string title: isLive
             ? "Live: " + String(source.interface || "Capture")
@@ -417,7 +494,13 @@ Rectangle {
             anchors.fill: parent
             hoverEnabled: true
             acceptedButtons: Qt.LeftButton
-            onClicked: root.session.selectSource(String(row.source.source_id))
+            // Selecting any packet source leaves the dashboard (upstream:
+            // select(_: .interface/.file/…) sets workspaceMode = .packets).
+            onClicked: {
+                if (root.captureMode === "overview")
+                    root.requestMode("packets")
+                root.session.selectSource(String(row.source.source_id))
+            }
         }
 
         Rectangle {

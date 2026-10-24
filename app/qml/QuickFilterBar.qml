@@ -14,10 +14,6 @@ Rectangle {
     implicitHeight: Theme.quickFilterHeight
     color: Theme.contentBackground
 
-    // Workspace mode (upstream NetworkInspectorWorkspaceMode): the segmented
-    // control toggles the Overview dashboard and the packet table.
-    property string workspaceMode: "packets"
-
     function focusDisplayFilter() {
         filterField.forceActiveFocus()
         filterField.selectAll()
@@ -58,56 +54,6 @@ Rectangle {
         anchors.rightMargin: 16
         spacing: 8
 
-        // Segmented mode toggle (upstream workspace mode picker).
-        Row {
-            id: modeToggle
-            Layout.preferredHeight: 24
-            spacing: 0
-
-            Repeater {
-                model: [
-                    { id: "overview", label: "Overview" },
-                    { id: "packets", label: "Packets" },
-                ]
-
-                delegate: Rectangle {
-                    id: modeSegment
-
-                    required property var modelData
-                    property int segmentIndex: index
-
-                    width: segmentLabel.implicitWidth + 24
-                    height: 24
-                    radius: modeSegment.segmentIndex === 0 ? 6 : 0
-                    color: root.workspaceMode === modeSegment.modelData.id
-                        ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.16)
-                        : (segmentMouse.containsMouse
-                            ? Qt.rgba(Theme.label.r, Theme.label.g, Theme.label.b, 0.06)
-                            : "transparent")
-                    border.width: 1
-                    border.color: Theme.separator
-
-                    Text {
-                        id: segmentLabel
-                        anchors.centerIn: parent
-                        text: modeSegment.modelData.label
-                        font.family: Theme.uiFont
-                        font.pixelSize: Theme.uiSmall
-                        font.weight: Font.Medium
-                        color: root.workspaceMode === modeSegment.modelData.id
-                            ? Theme.accent : Theme.label
-                    }
-
-                    MouseArea {
-                        id: segmentMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        onClicked: root.workspaceMode = modeSegment.modelData.id
-                    }
-                }
-            }
-        }
-
         Flickable {
             Layout.fillWidth: true
             Layout.preferredHeight: parent.height
@@ -115,7 +61,6 @@ Rectangle {
             clip: true
             flickableDirection: Flickable.HorizontalFlick
             boundsBehavior: Flickable.StopAtBounds
-            visible: root.workspaceMode === "packets"
 
             Row {
                 id: chipRow
@@ -171,7 +116,6 @@ Rectangle {
             color: Theme.windowBackground
             border.width: 1
             border.color: filterField.activeFocus ? Theme.accent : Theme.separator
-            visible: root.workspaceMode === "packets"
 
             TextField {
                 id: filterField

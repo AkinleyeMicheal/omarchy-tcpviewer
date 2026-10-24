@@ -579,6 +579,11 @@ ApplicationWindow {
         Sidebar {
             id: sidebar
             session: session
+            captureMode: window.captureMode
+            onRequestMode: (mode) => {
+                if (window.captureMode !== mode)
+                    window.captureMode = mode
+            }
             visible: window.sidebarVisible
             SplitView.preferredWidth: Theme.sidebarDefaultWidth
             SplitView.minimumWidth: Theme.sidebarMinimumWidth
@@ -951,13 +956,10 @@ ApplicationWindow {
                     anchors.top: parent.top
                     anchors.left: parent.left
                     anchors.right: parent.right
-                    height: Theme.quickFilterHeight
+                    width: parent.width
+                    height: window.captureMode === "packets" ? Theme.quickFilterHeight : 0
+                    visible: window.captureMode === "packets"
                     session: controller
-                    workspaceMode: window.captureMode
-                    onWorkspaceModeChanged: {
-                        if (window.captureMode !== workspaceMode)
-                            window.captureMode = workspaceMode
-                    }
                 }
 
                 Rectangle {
@@ -1049,6 +1051,10 @@ ApplicationWindow {
                         id: overviewPane
                         anchors.fill: parent
                         session: controller
+                        onRequestMode: (mode) => {
+                            if (window.captureMode !== mode)
+                                window.captureMode = mode
+                        }
                         visible: window.captureMode === "overview"
                     }
 
