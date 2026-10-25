@@ -107,12 +107,20 @@ fuzzing was performed in this pass.
   debug/CI aids. They are same-user environment variables, not a security
   boundary, and should not be exposed to untrusted processes.
 - **Live capture capabilities are lost on relink.** After rebuilding
-  `tcpviewerd`, re-apply (absolute path shown; the relative form works only from
-  the repository root):
-  `sudo setcap cap_net_raw,cap_net_admin+ep "$HOME/Work/omarchy-tcpviewer/daemon/.build/debug/tcpviewerd"`.
-  Until then, file viewing works but starting a live capture fails. The
-  launcher restarts a daemon that predates the `setcap` call so the new
-  capabilities take effect.
+  `tcpviewerd`, the file capabilities on the fresh binary are gone; file
+  viewing keeps working, but a live capture start fails until they are
+  re-applied. The panel and scripts handle this automatically: they attempt a
+  re-grant via the passwordless root helper, then a polkit desktop password
+  prompt, then cached `sudo -n`; any daemon that predates the grant is
+  restarted (`scripts/restart-stale-daemons.sh`) so the capabilities take
+  effect. Optional one-time bootstrap (run by the user with sudo):
+  `scripts/setup-capture-helper.sh` installs `hyprpolkitagent` (best effort),
+  a root-owned helper at
+  `/usr/local/libexec/omarchy-tcpviewer/grant-caps` that applies
+  `cap_net_raw,cap_net_admin+ep` to exactly one embedded binary path, and
+  `/usr/share/polkit-1/actions/org.omarchy-tcpviewer.grant-caps.policy`
+  authorizing only that helper, `allow_active=yes`, so active sessions grant
+  without a prompt. Removal: delete both files.
 
 ## Reproduce
 

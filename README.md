@@ -55,15 +55,32 @@ Ongoing use: run `omarchy-shell -q shell toggle fonsgaudii.tcpviewer` (or click
 the bar glyph) for capture status and to launch App; the app itself lives in your
 application menu as **Omarchy TCPViewer** once installed (below).
 
-For live capture, allow the daemon raw-socket access (re-apply after every
-rebuild):
+For live capture, the daemon needs raw-socket access. You never have to
+remember a command for it: Start-capture paths try to fix missing capabilities
+automatically — they ask polkit (a desktop password dialog), use the
+passwordless helper below once it is installed, or fall back to notifying you
+with the exact remedy. After a rebuild, which drops file capabilities, the
+panel re-grants them on the next Start (or build) the same way.
+
+Optional one-time setup so live capture never prompts at all (installs a
+root-owned, fixed-purpose helper plus a narrow polkit policy that only ever
+authorizes that helper; best-effort installs the hyprpolkitagent desktop
+agent):
+
+```sh
+sudo bash <plugin-dir>/omarchy-tcpviewer/scripts/setup-capture-helper.sh
+```
+
+And the manual command remains available if you ever prefer it:
 
 ```sh
 sudo setcap cap_net_raw,cap_net_admin+ep \
   <plugin-dir>/omarchy-tcpviewer/daemon/.build/debug/tcpviewerd
 ```
 
-Opening capture files works without capabilities.
+Opening capture files works without capabilities. To undo the optional setup,
+delete `/usr/local/libexec/omarchy-tcpviewer/` and
+`/usr/share/polkit-1/actions/org.omarchy-tcpviewer.grant-caps.policy`.
 
 ### Remove
 

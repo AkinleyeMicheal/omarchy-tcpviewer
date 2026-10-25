@@ -68,14 +68,11 @@ notify "Building TCPViewer…" "daemon + viewer app — first build takes a few 
     exit 1
 }
 
-# Live capture still needs capabilities; point at the exact command so the
-# next Start live capture succeeds. File viewing works without it.
-if [[ -x "$ROOT/daemon/.build/debug/tcpviewerd" ]]; then
-    if command -v getcap >/dev/null 2>&1 \
-        && ! getcap "$ROOT/daemon/.build/debug/tcpviewerd" 2>/dev/null | grep -q cap_net_raw; then
-        notify "TCPViewer build finished" \
-            "Launch it from the quick access panel. For live capture run:\nsudo setcap cap_net_raw,cap_net_admin+ep $ROOT/daemon/.build/debug/tcpviewerd"
-    else
-        notify "TCPViewer build finished" "Launch it from the quick access panel"
-    fi
+# Live capture still needs capabilities and relinking just dropped them.
+# Try to re-grant automatically (passwordless helper, polkit dialog, cached
+# sudo); when nothing can grant, the one-time setup command is surfaced.
+DAEMON="$ROOT/daemon/.build/debug/tcpviewerd"
+if [[ -x "$DAEMON" ]]; then
+    "$ROOT/scripts/grant-capture-caps.sh" "$DAEMON" || true
+    notify "TCPViewer build finished" "Launch it from the quick access panel"
 fi

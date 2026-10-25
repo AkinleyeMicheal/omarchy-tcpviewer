@@ -60,18 +60,18 @@ default_interface() {
 
 case "${1:-}" in
     start)
+        # Capabilities: try to fix automatically (passwordless helper via
+        # polkit policy, then a desktop password dialog, then cached sudo).
+        # If still missing, notify-send surfaces the exact one-time setup.
+        "$ROOT/scripts/grant-capture-caps.sh" "$DAEMON" || true
+        # A daemon started before a grant keeps running without the caps:
+        # restart those instances so the spawn below actually has them.
+        "$ROOT/scripts/restart-stale-daemons.sh" "$DAEMON"
         ensure_daemon || exit 1
         IFACE="$(default_interface)"
         if [[ -z "$IFACE" ]]; then
             notify "No default-route interface" "Open the app to pick one manually"
             exit 1
-        fi
-        # File capabilities are required for live capture; if they are absent
-        # the start below fails and the exact remedy is surfaced once.
-        if command -v getcap >/dev/null 2>&1 \
-            && ! getcap "$DAEMON" 2>/dev/null | grep -q 'cap_net_raw'; then
-            notify "Live capture needs capabilities" \
-                "sudo setcap cap_net_raw,cap_net_admin+ep $DAEMON"
         fi
         out="$("$CLI" capture start --interface "$IFACE" 2>&1)" || {
             notify "Capture failed on $IFACE" "$(printf '%s' "$out" | head -c 160)"
