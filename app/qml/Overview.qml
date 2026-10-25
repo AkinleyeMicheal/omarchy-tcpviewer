@@ -7,7 +7,7 @@ import "OverviewFormat.js" as Format
 
 // Overview page: the aggregate dashboard the owner sees first. Ported from
 // upstream CaptureOverviewViewController/CaptureOverviewDashboardView: a row
-// of metric tiles plus an adaptive grid of chart cards (upstream default set:
+// of metric tiles plus a 3-per-row grid of chart cards (upstream default set:
 // Packets, Throughput, Protocols, Top Apps, Top Domains & IPs, TCP Analysis;
 // Conversations/Services/Packet Lengths wait in the "+" picker). Data comes
 // from capture.overview; the daemon caches per revision and this page polls
@@ -61,12 +61,25 @@ Rectangle {
         return (Number(totals.packets) || 0) > 0
     }
 
-    // Same-size cards, as many per row as fit (upstream's adaptive grid).
-    readonly property real cardOuterWidth: 340
+    // Chart cards keep a fixed 3-per-row grid under the metric tile row
+    // (first 5 tiles, then rows of 3 with equal gaps), degrading to 2/1
+    // columns only when the content area is too narrow for 3 columns.
+    // Geometry resolves against the CART GRID's own width — the page root
+    // includes 16px+16px side margins, and sizing from it overshoots the
+    // content edge (last column clipped).
     readonly property real cardSpacing: 14
-    readonly property int cardColumns: Math.max(1, Math.floor((width + cardSpacing) / (cardOuterWidth + cardSpacing)))
-    readonly property real cardWidth: (width - (cardColumns - 1) * cardSpacing) / cardColumns
+    readonly property real cardMinWidth: 300
     readonly property real cardHeight: 300
+    // Explicit chunking (rows of at most cardColumns kinds): plain Row/Column
+    // lay out by explicit sizes; a plain Grid sizes columns by implicit widths
+    // and clipped the last column whenever real content was wider.
+    readonly property var cardRows: {
+        var rows = []
+        var step = cardGrid.columns
+        for (var i = 0; i < visibleCards.length; i += step)
+            rows.push(visibleCards.slice(i, i + step))
+        return rows
+    }
 
     function addCard(kind) {
         var next = visibleCards.slice()
@@ -266,20 +279,36 @@ Rectangle {
             }
 
             // Card grid ------------------------------------------------------
-            Flow {
+            Column {
                 id: cardGrid
                 width: parent.width
                 spacing: overviewPage.cardSpacing
                 visible: overviewPage.hasData
 
-                Repeater {
-                    model: overviewPage.visibleCards
+                readonly property int columns: Math.max(1, Math.min(3,
+                    Math.floor((width + overviewPage.cardSpacing) / (overviewPage.cardMinWidth + overviewPage.cardSpacing))))
+                readonly property real cardWidth: (width - (columns - 1) * overviewPage.cardSpacing) / columns
 
-                    delegate: OverviewCard {
-                        title: overviewPage.cardTitle(modelData)
-                        width: overviewPage.cardWidth
-                        height: overviewPage.cardHeight
-                        onRemoveRequested: overviewPage.removeCard(kind)
+                Repeater {
+                    model: overviewPage.cardRows
+
+                    delegate: Row {
+                        required property var modelData
+
+                        spacing: overviewPage.cardSpacing
+
+                        Repeater {
+                            model: parent.modelData
+
+                            // OverviewCard's own required modelData is filled
+                            // by Repeater injection here — do not shadow it.
+                            delegate: OverviewCard {
+                                title: overviewPage.cardTitle(modelData)
+                                width: cardGrid.cardWidth
+                                height: overviewPage.cardHeight
+                                onRemoveRequested: overviewPage.removeCard(modelData)
+                            }
+                        }
                     }
                 }
             }
@@ -356,7 +385,7 @@ Rectangle {
 
         required property var overview
 
-        spacing: 12
+        spacing: 14
 
         Repeater {
             model: {
@@ -402,7 +431,7 @@ Rectangle {
             delegate: Rectangle {
                 required property var modelData
 
-                width: Math.max(170, (metrics.width - 4 * 12) / 5)
+                width: Math.max(170, (metrics.width - 4 * metrics.spacing) / 5)
                 height: 86
                 radius: 10
                 color: Theme.contentBackground
