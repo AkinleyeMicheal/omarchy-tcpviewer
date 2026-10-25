@@ -11,7 +11,9 @@ The Overview page (shown above) opens by default: traffic totals, packets- and
 bytes-per-second, protocol share, top endpoints and TCP analysis counts, all
 computed from the loaded capture's buffer. Cards like *Top Domains & IPs* and
 *TCP Analysis* are click-through: selecting a row applies the matching display
-filter in the packet table. Data on the cover is a sanitized synthetic capture
+filter in the packet table. The **Share** header action exports the dashboard
+as Markdown (Copy / Save, mirroring upstream). Data on the cover is a
+sanitized synthetic capture
 (10.x / 203.0.113.x addresses, `example.com` names).
 
 ## Install (Omarchy plugin)
@@ -28,7 +30,10 @@ running, muted while it is stopped.
 ![Bar widget glyph](docs/plugin-bar.png)
 
 Clicking it toggles the quick access panel — capture status plus Launch,
-Start live capture, Stop capture and Open project page. The panel is fully
+Start live capture, Stop capture and Open project page. While the clone has
+no binaries yet, the panel shows an extra **Build engine & viewer** row that
+runs `scripts/build.sh` in the background (progress and the result arrive as
+desktop notifications; the log lands in `.build-logs/`). The panel is fully
 keyboard-navigable: ↑↓/Tab move, Enter/Space activate, Esc closes, and the
 focused row is inked with the accent border. Both scripts notify when a build
 or capability is missing instead of failing silently.

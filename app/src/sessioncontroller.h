@@ -104,6 +104,12 @@ public:
     Q_INVOKABLE void resumeCapture();
     Q_INVOKABLE void importFiles(const QVariantList &urls);
     Q_INVOKABLE void reportError(const QString &message);
+    // Clipboard/file helpers used by Overview "Share" actions (upstream
+    // Share menu: Copy as Markdown / Save as Markdown).
+    Q_INVOKABLE void copyToClipboard(const QString &text);
+    Q_INVOKABLE bool writeTextFile(const QString &path, const QString &text);
+    // Test hooks (CI/screenshots): read a single environment variable.
+    Q_INVOKABLE QString envValue(const QString &name) const;
     // Test hook: TCPVIEWER_OPEN_STATS opens the statistics window at launch.
     Q_PROPERTY(bool startupStatistics READ startupStatistics CONSTANT)
     Q_PROPERTY(QString startupDiffPackets READ startupDiffPackets CONSTANT)

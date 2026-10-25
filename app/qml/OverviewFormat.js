@@ -102,3 +102,86 @@ function issueLabel(kind) {
     }
     return String(kind)
 }
+
+// ----- Overview "Share" export (upstream Share: Copy/Save as Markdown) -----
+
+function markdownEscape(value) {
+    return String(value).replace(/\|/g, "\\|").replace(/\n/g, " ")
+}
+
+// Card-style rows: title, bytes and share relative to the largest row.
+function rowsMarkdown(rows, emptyNotice) {
+    var list = rows ? rows : []
+    if (list.length === 0)
+        return emptyNotice && emptyNotice.length > 0 ? "_" + emptyNotice + "_" : ""
+    var maxBytes = 0
+    var totals = []
+    for (var i = 0; i < list.length; i++) {
+        var rowTotals = list[i].totals ? list[i].totals : {}
+        var b = Number(rowTotals.bytes) || 0
+        totals.push({ title: list[i].title, bytes: b, packets: Number(rowTotals.packets) || 0 })
+        maxBytes = Math.max(maxBytes, b)
+    }
+    var out = "| Row | Bytes | Share |\n| --- | --- | --- |\n"
+    for (var j = 0; j < totals.length; j++) {
+        var share = maxBytes > 0 ? Math.round((totals[j].bytes / maxBytes) * 1000) / 10 : 0
+        out += "| " + markdownEscape(totals[j].title) + " | " + bytes(totals[j].bytes)
+            + " | " + share.toFixed(1) + "% |\n"
+    }
+    return out
+}
+
+function tcpIssuesMarkdown(issues) {
+    var list = issues ? issues : []
+    if (list.length === 0)
+        return "_No flagged packets_"
+    var out = "| Issue | Packets |\n| --- | --- |\n"
+    for (var i = 0; i < list.length; i++)
+        out += "| " + markdownEscape(issueLabel(list[i].kind)) + " | " + count(list[i].packets) + " |\n"
+    return out
+}
+
+// Full overview summary in the shape of the dashboard's cards. `sourceLabel`
+// is the header subtitle (basename or "Live on <iface>").
+function summaryMarkdown(overview, sourceLabel) {
+    var data = overview ? overview : {}
+    var totals = data.totals ? data.totals : {}
+    var packets = Number(totals.packets) || 0
+    var bytesCount = Number(totals.bytes) || 0
+    var sent = Number(totals.sent_bytes) || 0
+    var received = Number(totals.received_bytes) || 0
+    var firstMs = Number(data.first_packet_ms) || 0
+    var lastMs = Number(data.last_packet_ms) || 0
+    var duration = Math.max(0, lastMs - firstMs)
+    var spanSeconds = Math.max(0, duration / 1000)
+    var pps = spanSeconds >= 1 ? packets / spanSeconds : 0
+    var tcp = Number(data.tcp_packet_count) || 0
+    var issuePackets = Number(totals.issue_packets) || 0
+
+    var out = "# TCP Viewer overview\n\n"
+    if (sourceLabel && sourceLabel.length > 0)
+        out += "Source: **" + markdownEscape(sourceLabel) + "**\n\n"
+    out += "- Packets: " + count(packets)
+        + (spanSeconds >= 1
+            ? " (" + (pps >= 1 ? count(pps) : "<1") + " packets/s avg)"
+            : "")
+        + "\n"
+    out += "- Data transferred: " + bytes(bytesCount)
+    if (sent > 0 || received > 0)
+        out += " (↑ " + bytes(sent) + " · ↓ " + bytes(received) + ")"
+    out += "\n"
+    out += "- Average throughput: " + rate(spanSeconds > 0 ? bytesCount / spanSeconds : 0)
+        + " (" + span(duration) + " captured)\n"
+    out += "- TCP packets: " + count(tcp)
+        + (issuePackets > 0 ? " — " + count(issuePackets) + " flagged (" + percent(issuePackets, tcp) + ")" : "")
+        + "\n"
+    out += "- Apps: " + count(Number(data.app_count) || 0)
+        + " · Domains: " + count(Number(data.domain_count) || 0) + "\n"
+
+    out += "\n## Protocols\n\n" + rowsMarkdown(data.protocols, "No protocol traffic recorded")
+    out += "\n## Top Apps\n\n" + rowsMarkdown(data.top_apps,
+        "Apps appear once live traffic is attributed to local processes")
+    out += "\n## Top Destinations\n\n" + rowsMarkdown(data.top_destinations, "No destinations recorded")
+    out += "\n## TCP Analysis\n\n" + tcpIssuesMarkdown(data.tcp_issues)
+    return out
+}

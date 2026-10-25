@@ -1,6 +1,9 @@
 #include "sessioncontroller.h"
 
+#include <QClipboard>
 #include <QDateTime>
+#include <QFile>
+#include <QGuiApplication>
 #include <QSettings>
 #include <QTimer>
 #include <QUrl>
@@ -709,6 +712,38 @@ void SessionController::clearError()
 void SessionController::reportError(const QString &message)
 {
     setError(message);
+}
+
+void SessionController::copyToClipboard(const QString &text)
+{
+    QGuiApplication::clipboard()->setText(text, QClipboard::Clipboard);
+    // Best-effort synchronous mirror for plain-text-aware Wayland clients
+    // before the daemon clipboard relay takes over.
+    QGuiApplication::clipboard()->setText(text, QClipboard::Selection);
+}
+
+bool SessionController::writeTextFile(const QString &path, const QString &text)
+{
+    if (path.isEmpty())
+        return false;
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        qWarning() << "writeTextFile: cannot open" << path << file.errorString();
+        return false;
+    }
+    const QByteArray body = text.toUtf8();
+    if (file.write(body) != body.size()) {
+        qWarning() << "writeTextFile: short write to" << path << file.errorString();
+        return false;
+    }
+    return true;
+}
+
+QString SessionController::envValue(const QString &name) const
+{
+    if (name.isEmpty() || !qEnvironmentVariableIsSet(name.toUtf8().constData()))
+        return {};
+    return qEnvironmentVariable(name.toUtf8().constData());
 }
 
 void SessionController::setLoading(bool loading)

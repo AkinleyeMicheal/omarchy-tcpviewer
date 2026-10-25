@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import Omarchy.TCPViewer
 import "OverviewFormat.js" as Format
@@ -84,6 +85,60 @@ Rectangle {
         }
     }
 
+    // Header subtitle: the file's basename in chrome; full paths and live
+    // capture wording stay out of the page header.
+    readonly property string sourceLabel: {
+        var status = session ? session.status : {}
+        var raw = status.path || status.display_name || status.interface || ""
+        if (raw.length === 0)
+            return ""
+        var name = String(raw).split("/").pop()
+        return status.kind === "offline" ? name : "Live on " + name
+    }
+
+    // Upstream Share actions: Copy as Markdown / Save as Markdown. Computed
+    // at call time so the export always mirrors the dashboard's current data.
+    property bool shareCopied: false
+    property string pendingMarkdown: ""
+
+    function markdownForOverview() {
+        return Format.summaryMarkdown(overview, sourceLabel)
+    }
+
+    function copyOverviewMarkdown() {
+        if (!hasData || !session)
+            return
+        session.copyToClipboard(markdownForOverview())
+        shareCopied = true
+        shareResetTimer.restart()
+    }
+
+    function saveOverviewMarkdown(path) {
+        if (!hasData || !session || path.length === 0)
+            return
+        if (!session.writeTextFile(path, markdownForOverview()))
+            session.reportError("Could not save " + path)
+    }
+
+    function fileDialogPath(file) {
+        const value = String(file)
+        if (value.startsWith("file://"))
+            return decodeURIComponent(value.slice("file://".length))
+        return value
+    }
+
+    // CI hook: when TCPVIEWER_DUMP_OVERVIEW_MD is set, write the Share
+    // export's markdown to that path once data arrives (validates the
+    // upstream Share/Copy-as-Markdown output without interactive testing).
+    property bool mdDumped: false
+    onHasDataChanged: {
+        var path = session ? session.envValue("TCPVIEWER_DUMP_OVERVIEW_MD") : ""
+        if (hasData && !mdDumped && path.length > 0) {
+            mdDumped = true
+            session.writeTextFile(path, markdownForOverview())
+        }
+    }
+
     function cardTitle(kind) {
         switch (String(kind)) {
         case "packets": return "Packets"
@@ -109,6 +164,40 @@ Rectangle {
         repeat: true
         triggeredOnStart: false
         onTriggered: overviewPage.session.requestOverview()
+    }
+
+    Timer {
+        id: shareResetTimer
+        interval: 2000
+        repeat: false
+        onTriggered: overviewPage.shareCopied = false
+    }
+
+    // Upstream Share menu on the dashboard header.
+    Menu {
+        id: shareMenu
+
+        MenuItem {
+            text: "Copy as Markdown"
+            onTriggered: overviewPage.copyOverviewMarkdown()
+        }
+        MenuItem {
+            text: "Save as Markdown…"
+            onTriggered: {
+                overviewPage.pendingMarkdown = overviewPage.markdownForOverview()
+                exportOverviewDialog.open()
+            }
+        }
+    }
+
+    FileDialog {
+        id: exportOverviewDialog
+        title: "Export overview summary"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "md"
+        nameFilters: ["Markdown (*.md)"]
+        onAccepted: overviewPage.saveOverviewMarkdown(
+            overviewPage.fileDialogPath(exportOverviewDialog.selectedFile))
     }
 
     Flickable {
@@ -146,16 +235,7 @@ Rectangle {
                     font.family: Theme.uiFont
                     font.pixelSize: Theme.uiSmall
                     color: Theme.secondaryLabel
-                    text: {
-                        var status = overviewPage.session.status
-                        var raw = status.path || status.display_name || status.interface || ""
-                        if (raw.length === 0)
-                            return ""
-                        // Only the file's basename in chrome; full paths and
-                        // live capture wording stay out of the page header.
-                        var name = String(raw).split("/").pop()
-                        return status.kind === "offline" ? name : "Live on " + name
-                    }
+                    text: overviewPage.sourceLabel
                 }
 
                 // Upstream CaptureOverviewDashboardView header actions: the
@@ -165,6 +245,17 @@ Rectangle {
                     font.family: Theme.uiFont
                     font.pixelSize: Theme.uiSmall
                     onClicked: overviewPage.requestMode("packets")
+                }
+
+                // Upstream Share menu: export the dashboard as Markdown.
+                ToolButton {
+                    id: shareButton
+
+                    enabled: overviewPage.hasData
+                    text: overviewPage.shareCopied ? "Copied ✓" : "Share ▾"
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.uiSmall
+                    onClicked: shareMenu.popup(shareButton.x, shareButton.y + shareButton.height + 4)
                 }
             }
 

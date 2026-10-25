@@ -29,6 +29,12 @@ Item {
     property bool daemonRunning: false
     property bool binariesReady: false
     property bool captureActive: false
+    property bool building: false
+
+    onBinariesReadyChanged: {
+        if (root.binariesReady)
+            root.building = false
+    }
 
     readonly property string statusLabel: !root.probed
         ? "Checking capture engine…"
@@ -112,6 +118,11 @@ Item {
     function stopCapture() {
         Util.execDetached('"' + root.pluginDir + '/scripts/quick-capture.sh" stop')
         root.refreshSoon()
+    }
+
+    function buildNow() {
+        root.building = true
+        Util.execDetached('"' + root.pluginDir + '/scripts/build.sh"')
     }
 
     function openProjectPage() {
@@ -328,16 +339,22 @@ Item {
                     }
                 }
 
-                // Actions
+                // Actions. The Build row appears only while the clone has no
+                // binaries, keeping the list short once everything is ready.
                 Repeater {
                     id: actionRows
 
-                    model: [
-                        { label: "Launch TCPViewer", hint: "daemon + viewer app", glyph: "▶", action: function() { root.launch() } },
-                        { label: "Start live capture", hint: root.captureActive ? "already capturing" : "default interface", glyph: "●", action: function() { root.startCapture() } },
-                        { label: "Stop capture", hint: "keeps the daemon running", glyph: "■", action: function() { root.stopCapture() } },
-                        { label: "Open project page", hint: "github.com/AkinleyeMicheal", glyph: "↗", action: function() { root.openProjectPage() } }
-                    ]
+                    model: {
+                        var rows = [
+                            { label: "Launch TCPViewer", hint: "daemon + viewer app", glyph: "▶", action: function() { root.launch() } }
+                        ]
+                        if (!root.binariesReady)
+                            rows.push({ label: "Build engine & viewer", hint: root.building ? "running in background…" : "first build takes minutes", glyph: "⚒", action: function() { root.buildNow() } })
+                        rows.push({ label: "Start live capture", hint: root.captureActive ? "already capturing" : "default interface", glyph: "●", action: function() { root.startCapture() } })
+                        rows.push({ label: "Stop capture", hint: "keeps the daemon running", glyph: "■", action: function() { root.stopCapture() } })
+                        rows.push({ label: "Open project page", hint: "github.com/AkinleyeMicheal", glyph: "↗", action: function() { root.openProjectPage() } })
+                        return rows
+                    }
 
                     delegate: Rectangle {
                         id: actionRow
