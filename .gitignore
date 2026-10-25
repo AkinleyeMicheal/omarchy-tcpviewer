@@ -17,3 +17,4 @@ node_modules/
 *.local.xcconfig
 compile_commands.json
 .cache/
+.build-logs/
