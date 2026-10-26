@@ -10,6 +10,7 @@
 import Foundation
 import PcapPlusPlusCore
 import TCPViewerIPC
+import TCPViewerOverview
 
 final class CommandRouter: @unchecked Sendable {
     private let manager: SourceManager
@@ -437,6 +438,16 @@ final class CommandRouter: @unchecked Sendable {
             "info": .string(packet.infoSummary),
             "decode_status": .string(packet.decodeStatus.kind.rawValue),
         ]
+        // Per-row severity mirrors the Overview TCP-issue classifier so the
+        // table can highlight problem rows the same card the dashboard counts.
+        var issues = CaptureOverviewClassifier.tcpIssues(
+            for: packet,
+            isTCP: packet.transportHint == .tcp
+        )
+        if issues.isEmpty && packet.decodeStatus.kind == .malformed {
+            issues = [.malformed]
+        }
+        data["severity"] = .string(issues.isEmpty ? "normal" : "warning")
         if let protocolSummary = packet.protocolSummary {
             data["protocol"] = .string(protocolSummary)
         }

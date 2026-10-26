@@ -48,6 +48,10 @@ class SessionController : public QObject
     Q_PROPERTY(int startupWindowHeight READ startupWindowHeight CONSTANT)
     Q_PROPERTY(QString selectedInterface READ selectedInterface WRITE setSelectedInterface NOTIFY selectedInterfaceChanged)
     Q_PROPERTY(QString filterText READ filterText NOTIFY filterTextChanged)
+    // Active quick-filter chip IDs (lowercase upstream ids, e.g. "tcp").
+    // Reflects both QML clicks and startup hooks, so chips can highlight the
+    // truth rather than their own local state.
+    Q_PROPERTY(QStringList quickFilters READ quickFilters NOTIFY quickFiltersChanged)
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorTextChanged)
     Q_PROPERTY(bool loading READ loading NOTIFY loadingChanged)
     Q_PROPERTY(QString capturePhase READ capturePhase NOTIFY statusChanged)
@@ -89,6 +93,7 @@ public:
     QString selectedInterface() const { return m_selectedInterface; }
     void setSelectedInterface(const QString &interfaceID);
     QString filterText() const { return m_filterText; }
+    QStringList quickFilters() const { return m_quickFilters; }
     QString errorText() const { return m_errorText; }
     bool loading() const { return m_loading; }
     QString capturePhase() const { return m_status.value(QStringLiteral("phase")).toString(); }
@@ -146,6 +151,7 @@ signals:
     void currentSourceChanged();
     void selectedInterfaceChanged();
     void filterTextChanged();
+    void quickFiltersChanged();
     void errorTextChanged();
     void loadingChanged();
     void selectedPacketIDChanged();

@@ -985,8 +985,16 @@ final class SourceManager: @unchecked Sendable {
             case "serverHello":
                 if summary.infoSummary.localizedCaseInsensitiveContains("server hello") { return true }
             case "errors":
-                if summary.decodeStatus.kind == .malformed
-                    || summary.infoSummary.localizedCaseInsensitiveContains("malformed") { return true }
+                // Same source of truth as the Overview "TCP Issues" card:
+                // malformed decodes plus classified TCP flaws (retransmission,
+                // lost segment, RST, zero-window, dup ACK) all count as errors,
+                // so clicking the chip never shows an empty table while the
+                // dashboard still reports issues.
+                if summary.decodeStatus.kind == .malformed { return true }
+                if !CaptureOverviewClassifier.tcpIssues(
+                    for: summary,
+                    isTCP: summary.transportHint == .tcp
+                ).isEmpty { return true }
             case "all":
                 return true
             default:

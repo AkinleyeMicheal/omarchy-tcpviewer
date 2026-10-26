@@ -78,6 +78,15 @@ SessionController::SessionController(QObject *parent)
     // source-tree node after its first matching packet batch arrives.
     m_startupCaptureIface = qEnvironmentVariable("TCPVIEWER_CAPTURE_IFACE");
     m_treeSelectNode = qEnvironmentVariable("TCPVIEWER_TREE_SELECT");
+    // CI/test hook: preselect quick-filter chips (e.g. "tcp", "errors")
+    // so filtered-table flows can be captured without a mouse click.
+    const QStringList quickHook =
+        qEnvironmentVariable("TCPVIEWER_QUICK_FILTERS").split(u',', Qt::SkipEmptyParts);
+    for (const QString &chip : quickHook) {
+        const QString id = chip.trimmed();
+        if (!id.isEmpty())
+            m_quickFilters.append(id);
+    }
 
     m_pollTimer = new QTimer(this);
     m_pollTimer->setInterval(100);
@@ -329,6 +338,7 @@ void SessionController::setQuickFilters(const QVariantList &quickFilters)
         return;
     clearSelection();
     m_quickFilters = next;
+    emit quickFiltersChanged();
     resetStream();
 }
 
@@ -425,12 +435,14 @@ void SessionController::requestPackets(bool firstPage)
         {QStringLiteral("source_id"), m_currentSourceID},
         {QStringLiteral("limit"), m_pageSize},
     };
+    // Both scopes ride on EVERY request. Quick chips are per-request on the
+    // daemon (absent = show all), so catch-up and follow pages that omit them
+    // silently refilled the table with unfiltered rows. The display filter is
+    // source-sticky, but re-sending it is idempotent.
+    params.insert(QStringLiteral("filter"), m_filterText);
+    params.insert(QStringLiteral("quick_filters"), m_quickFilters);
     if (firstPage) {
         params.insert(QStringLiteral("offset"), 0);
-        // Present on the first request so the source-level filter is set or
-        // cleared exactly to the GUI's state; later polls keep it sticky.
-        params.insert(QStringLiteral("filter"), m_filterText);
-        params.insert(QStringLiteral("quick_filters"), m_quickFilters);
     } else {
         params.insert(QStringLiteral("since_id"), QString::number(m_lastPacketID));
     }
@@ -912,6 +924,12 @@ PacketRow SessionController::parseSummary(const QVariantMap &summary)
     row.direction = summary.value(QStringLiteral("direction")).toString();
     row.interfaceName = summary.value(QStringLiteral("interface")).toString();
     row.decodeStatus = summary.value(QStringLiteral("decode_status")).toString();
+    // The daemon flags TCP-issue packets (retransmission, RST, zero-window,
+    // …) the same way the Overview classifies them; 1 renders the summary in
+    // the warning color so problem rows stand out like the Errors chip.
+    row.severity = summary.value(QStringLiteral("severity")).toString() == QStringLiteral("warning")
+        ? 1
+        : 0;
     row.sourceKind = summary.value(QStringLiteral("source_kind")).toString();
     row.comment = summary.value(QStringLiteral("comment")).toString();
     row.length = summary.value(QStringLiteral("length")).toInt();

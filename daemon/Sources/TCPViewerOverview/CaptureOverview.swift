@@ -55,7 +55,7 @@ enum OverviewTransport: String, Sendable {
 }
 
 // Upstream CaptureOverviewTCPIssueKind; raw values order rows most severe first.
-enum OverviewTCPIssueKind: Int, CaseIterable, Sendable {
+public enum OverviewTCPIssueKind: Int, CaseIterable, Sendable {
     case malformed
     case lostSegment
     case retransmission
@@ -85,7 +85,7 @@ struct OverviewConversationSample: Sendable {
 // The classifier constants and infallible mappings from one PacketSummary.
 // Wireshark expert text is dissected in NativeTCPViewerCore; overviews read
 // the flags it surfaces.
-enum CaptureOverviewClassifier {
+public enum CaptureOverviewClassifier {
     // The lowest transport port is almost always the server's service port.
     static func serviceKey(for packet: PacketSummary, isTCP: Bool) -> OverviewServiceKey? {
         guard let sourcePort = packet.endpoints.source.port,
@@ -188,7 +188,7 @@ enum CaptureOverviewClassifier {
 
     // Read the markers Wireshark writes to the Info column; each flag matches
     // its row's display filter.
-    static func tcpIssues(for packet: PacketSummary, isTCP: Bool) -> [OverviewTCPIssueKind] {
+    public static func tcpIssues(for packet: PacketSummary, isTCP: Bool) -> [OverviewTCPIssueKind] {
         var issues: [OverviewTCPIssueKind] = []
         let info = packet.infoSummary
         if info.hasSuffix("]"), info.suffix(160).contains(malformedInfoMarker) {

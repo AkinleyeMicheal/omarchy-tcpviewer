@@ -20,6 +20,32 @@ Rectangle {
     }
 
     property var selectedIDs: []
+    // Quick filters can be set before this bar appears (CI startup hook) or
+    // by an outside actor (saved-filter restore). Chips must show the
+    // session's truth, so mirror it whenever the two sets disagree.
+    // toggleChip writes local state before calling session, so the mirror
+    // never loops back into an edit.
+    function syncSelectedIDs() {
+        const sessionIds = session.quickFilters
+        const local = selectedIDs
+        if (sessionIds.length !== local.length) {
+            selectedIDs = sessionIds.slice()
+            return
+        }
+        for (var i = 0; i < sessionIds.length; ++i) {
+            if (sessionIds[i] !== local[i]) {
+                selectedIDs = sessionIds.slice()
+                return
+            }
+        }
+    }
+    Component.onCompleted: syncSelectedIDs()
+    Connections {
+        target: root.session
+        function onQuickFiltersChanged() {
+            root.syncSelectedIDs()
+        }
+    }
     readonly property var chips: [
         { id: "all", label: "All" },
         { id: "tcp", label: "TCP" },
