@@ -100,7 +100,10 @@ Item {
             delegate: Item {
                 required property int index
                 required property var modelData
-                x: root.offsets[index]
+                // Track the body's horizontal scroll: when the TableView pans
+                // left/right, headers must slide with their columns or the
+                // field above a cell stops naming it.
+                x: root.offsets[index] - table.contentX
                 width: root.cellWidth(index)
                 height: header.height
 
@@ -193,6 +196,7 @@ Item {
         rowHeightProvider: function(row) { return Theme.packetRowHeight }
 
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
 
         delegate: Rectangle {
             id: cell
