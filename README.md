@@ -12,9 +12,9 @@ bytes-per-second, protocol share, top endpoints and TCP analysis counts, all
 computed from the loaded capture's buffer. Cards like *Top Domains & IPs* and
 *TCP Analysis* are click-through: selecting a row applies the matching display
 filter in the packet table. The **Share** header action exports the dashboard
-as Markdown (Copy / Save, mirroring upstream). Data on the cover is a
-sanitized synthetic capture
-(10.x / 203.0.113.x addresses, `example.com` names).
+as Markdown (Copy / Save, mirroring upstream). The cover is a live Ethernet
+capture taken after a couple of minutes of ordinary traffic, so the dashboard
+shows real process attribution (Top Apps) and endpoint ranking.
 
 ## Install (Omarchy plugin)
 
@@ -175,6 +175,25 @@ The packet table remains one click away via the segmented
   widths; widths persist across launches.
 - Right-clicking a protocol-detail row in the inspector offers
   **Create Column**, adding a bounded table column backed by that field.
+
+## Filters
+
+- **Quick filters** — the chip row above the table narrows every request (TCP,
+  UDP, DNS, HTTP, TLS, WebSocket, Client/Server Hello, Errors). Chip
+  predicates are evaluated by the daemon per request and stack on top of the
+  display filter.
+- **Display filter** — the field on the right accepts Wireshark syntax
+  (`tcp.port == 80`, `http.host contains "example.com"`); Enter applies it and
+  the × clears it.
+- **Builder** — opens a row editor for up to five field/condition/value
+  conditions joined with AND or OR. It covers addresses, ports, HTTP host,
+  DNS name, TLS server name, protocol, frame text and packet length, previews
+  the generated expression, and applies it with Enter or **Apply**.
+- **Favorites** — pin the current expression with ☆ or save it under a name
+  with ⊕. Pinned and saved filters live in the sidebar's **Favorites** group
+  and apply with one click; the row's × removes them.
+
+![Structured filter builder](docs/filter-builder.png)
 
 ## Diff
 
