@@ -208,7 +208,11 @@ ApplicationWindow {
         var items = []
         for (var i = 0; i < session.interfaces.length; ++i) {
             var iface = session.interfaces[i]
-            var label = iface.friendly_name ? iface.friendly_name + " (" + iface.id + ")" : iface.id
+            var label = iface.friendly_name ? String(iface.friendly_name) : String(iface.id)
+            // The daemon usually already formats "Ethernet (enp0s25)"; only add
+            // the technical name when the friendly name omits it.
+            if (iface.id && label.indexOf("(" + iface.id + ")") < 0)
+                label = label + " (" + iface.id + ")"
             items.push({ id: String(iface.id), label: label })
         }
         return items
