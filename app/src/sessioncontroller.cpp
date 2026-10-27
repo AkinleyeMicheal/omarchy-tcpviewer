@@ -78,6 +78,7 @@ SessionController::SessionController(QObject *parent)
     // source-tree node after its first matching packet batch arrives.
     m_startupCaptureIface = qEnvironmentVariable("TCPVIEWER_CAPTURE_IFACE");
     m_treeSelectNode = qEnvironmentVariable("TCPVIEWER_TREE_SELECT");
+    m_startupFilter = qEnvironmentVariable("TCPVIEWER_FILTER").trimmed();
     // CI/test hook: preselect quick-filter chips (e.g. "tcp", "errors")
     // so filtered-table flows can be captured without a mouse click.
     const QStringList quickHook =
@@ -86,6 +87,31 @@ SessionController::SessionController(QObject *parent)
         const QString id = chip.trimmed();
         if (!id.isEmpty())
             m_quickFilters.append(id);
+    }
+
+    // Sidebar Favorites (upstream PacketCustomFilterService): pinned display
+    // filters and named saved filters live in QSettings alongside the
+    // overview card layout. Corrupt or partial entries are skipped.
+    {
+        QSettings settings;
+        m_pinnedFilters =
+            settings.value(QStringLiteral("filters/pinned")).toStringList();
+        const int savedCount =
+            settings.beginReadArray(QStringLiteral("filters/saved"));
+        for (int i = 0; i < savedCount; ++i) {
+            settings.setArrayIndex(i);
+            const QString name =
+                settings.value(QStringLiteral("name")).toString().trimmed();
+            const QString query =
+                settings.value(QStringLiteral("query")).toString().trimmed();
+            if (!name.isEmpty() && !query.isEmpty()) {
+                m_savedFilters.append(QVariantMap{
+                    {QStringLiteral("name"), name},
+                    {QStringLiteral("query"), query},
+                });
+            }
+        }
+        settings.endArray();
     }
 
     m_pollTimer = new QTimer(this);
@@ -301,6 +327,14 @@ void SessionController::selectSourceInternal(const QString &sourceID)
         return;
     }
 
+    // CI/screenshot hook: the first opened source starts with this display
+    // filter, so filtered tables and Favorites selection states are capturable.
+    if (!m_startupFilter.isEmpty() && !m_startupFilterApplied) {
+        m_startupFilterApplied = true;
+        m_filterText = m_startupFilter;
+        emit filterTextChanged();
+    }
+
     resetStream();
     refreshStatus();
     emit sourceOpened(sourceID);
@@ -340,6 +374,96 @@ void SessionController::setQuickFilters(const QVariantList &quickFilters)
     m_quickFilters = next;
     emit quickFiltersChanged();
     resetStream();
+}
+
+// Sidebar Favorites. Pinned filters are bare expressions (one click applies
+// them); saved filters carry a display name. Persistence intentionally lives
+// in QSettings so it survives plugin updates and never overwrites user files
+// (upstream keeps the same data in PacketCustomFilterService's JSON store).
+void SessionController::pinFilter(const QString &expression)
+{
+    const QString trimmed = expression.trimmed();
+    if (trimmed.isEmpty() || m_pinnedFilters.contains(trimmed))
+        return;
+    m_pinnedFilters.append(trimmed);
+    QSettings().setValue(QStringLiteral("filters/pinned"), m_pinnedFilters);
+    emit filtersChanged();
+}
+
+void SessionController::unpinFilter(const QString &expression)
+{
+    if (m_pinnedFilters.removeAll(expression.trimmed()) == 0)
+        return;
+    QSettings().setValue(QStringLiteral("filters/pinned"), m_pinnedFilters);
+    emit filtersChanged();
+}
+
+QString SessionController::saveFilter(const QString &name, const QString &query)
+{
+    // Validation mirrors upstream PacketCustomFilterService.normalizedName:
+    // trimmed, non-empty, at most 40 characters.
+    const QString trimmedName = name.trimmed();
+    const QString trimmedQuery = query.trimmed();
+    if (trimmedName.isEmpty())
+        return QStringLiteral("Enter a filter name.");
+    if (trimmedName.size() > 40)
+        return QStringLiteral("Filter names must be 40 characters or fewer.");
+    if (trimmedQuery.isEmpty())
+        return QStringLiteral("Enter a display filter first.");
+
+    bool replaced = false;
+    for (QVariant &entry : m_savedFilters) {
+        QVariantMap map = entry.toMap();
+        if (map.value(QStringLiteral("name")).toString() == trimmedName) {
+            map.insert(QStringLiteral("query"), trimmedQuery);
+            entry = map;
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced) {
+        m_savedFilters.append(QVariantMap{
+            {QStringLiteral("name"), trimmedName},
+            {QStringLiteral("query"), trimmedQuery},
+        });
+    }
+    persistSavedFilters();
+    emit filtersChanged();
+    return QString();
+}
+
+void SessionController::removeSavedFilter(const QString &name)
+{
+    const QString trimmed = name.trimmed();
+    bool removed = false;
+    for (qsizetype i = 0; i < m_savedFilters.size(); ++i) {
+        if (m_savedFilters.at(i).toMap().value(QStringLiteral("name")).toString()
+            == trimmed) {
+            m_savedFilters.removeAt(i);
+            removed = true;
+            break;
+        }
+    }
+    if (!removed)
+        return;
+    persistSavedFilters();
+    emit filtersChanged();
+}
+
+void SessionController::persistSavedFilters()
+{
+    QSettings settings;
+    settings.remove(QStringLiteral("filters/saved"));
+    settings.beginWriteArray(QStringLiteral("filters/saved"));
+    for (qsizetype i = 0; i < m_savedFilters.size(); ++i) {
+        settings.setArrayIndex(int(i));
+        const QVariantMap map = m_savedFilters.at(i).toMap();
+        settings.setValue(QStringLiteral("name"),
+                          map.value(QStringLiteral("name")));
+        settings.setValue(QStringLiteral("query"),
+                          map.value(QStringLiteral("query")));
+    }
+    settings.endArray();
 }
 
 void SessionController::selectTreeFilter(const QString &nodeId)

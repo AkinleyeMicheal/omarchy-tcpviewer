@@ -52,6 +52,11 @@ class SessionController : public QObject
     // Reflects both QML clicks and startup hooks, so chips can highlight the
     // truth rather than their own local state.
     Q_PROPERTY(QStringList quickFilters READ quickFilters NOTIFY quickFiltersChanged)
+    // Sidebar Favorites (upstream PacketSourceListService): pinned display-
+    // filter expressions and named saved filters, persisted in QSettings next
+    // to the overview card layout.
+    Q_PROPERTY(QStringList pinnedFilters READ pinnedFilters NOTIFY filtersChanged)
+    Q_PROPERTY(QVariantList savedFilters READ savedFilters NOTIFY filtersChanged)
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorTextChanged)
     Q_PROPERTY(bool loading READ loading NOTIFY loadingChanged)
     Q_PROPERTY(QString capturePhase READ capturePhase NOTIFY statusChanged)
@@ -94,6 +99,8 @@ public:
     void setSelectedInterface(const QString &interfaceID);
     QString filterText() const { return m_filterText; }
     QStringList quickFilters() const { return m_quickFilters; }
+    QStringList pinnedFilters() const { return m_pinnedFilters; }
+    QVariantList savedFilters() const { return m_savedFilters; }
     QString errorText() const { return m_errorText; }
     bool loading() const { return m_loading; }
     QString capturePhase() const { return m_status.value(QStringLiteral("phase")).toString(); }
@@ -123,6 +130,13 @@ public:
     Q_INVOKABLE void clearPackets();
     Q_INVOKABLE void applyFilter(const QString &filter);
     Q_INVOKABLE void setQuickFilters(const QVariantList &quickFilters);
+    // Sidebar Favorites: pin/unpin the current display-filter expression and
+    // manage named filters. saveFilter returns "" on success or a user-facing
+    // validation message (mirrors upstream PacketCustomFilterService).
+    Q_INVOKABLE void pinFilter(const QString &expression);
+    Q_INVOKABLE void unpinFilter(const QString &expression);
+    Q_INVOKABLE QString saveFilter(const QString &name, const QString &query);
+    Q_INVOKABLE void removeSavedFilter(const QString &name);
     Q_INVOKABLE void selectTreeFilter(const QString &nodeId);
     Q_INVOKABLE void toggleTreeExpanded(const QString &nodeId);
     Q_INVOKABLE void selectPacket(const QString &packetID);
@@ -152,6 +166,7 @@ signals:
     void selectedInterfaceChanged();
     void filterTextChanged();
     void quickFiltersChanged();
+    void filtersChanged();
     void errorTextChanged();
     void loadingChanged();
     void selectedPacketIDChanged();
@@ -173,6 +188,7 @@ private:
     void selectSourceInternal(const QString &sourceID);
     void resetStream();
     void requestPackets(bool firstPage);
+    void persistSavedFilters();
     void setError(const QString &message);
     void setLoading(bool loading);
     void setTotalCount(int total);
@@ -195,6 +211,10 @@ private:
     QString m_overviewRevisionKey;
     QString m_currentSourceID;
     QString m_startupCaptureMode;
+    // CI/screenshot hook: TCPVIEWER_FILTER applies a display filter to the
+    // first opened source (also exercises the Favorites selection state).
+    QString m_startupFilter;
+    bool m_startupFilterApplied = false;
     bool m_interfacesHidden = false;
     int m_startupWindowWidth = 0;
     int m_startupWindowHeight = 0;
@@ -203,6 +223,8 @@ private:
     QString m_errorText;
     QString m_pendingSelectPath;
     QStringList m_quickFilters;
+    QStringList m_pinnedFilters;
+    QVariantList m_savedFilters;
     bool m_loading = false;
     bool m_requestInFlight = false;
     bool m_overviewLoading = false;

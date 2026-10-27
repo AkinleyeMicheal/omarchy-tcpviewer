@@ -130,6 +130,54 @@ Rectangle {
                     text: "No live capture"
                 }
 
+                // Upstream PacketSourceListService.putItem: Favorites sits
+                // between Capture and Files. "Pinned" holds one-click pinned
+                // display-filter expressions, "Saved" holds named filters.
+                GroupHeader { text: "Favorites" }
+
+                SidebarPlaceholder {
+                    visible: root.session.pinnedFilters.length === 0
+                        && root.session.savedFilters.length === 0
+                    width: treeList.width
+                    text: "No pinned or saved filters"
+                }
+
+                SidebarSubHeader {
+                    visible: root.session.pinnedFilters.length > 0
+                    width: treeList.width
+                    text: "Pinned"
+                }
+
+                Repeater {
+                    model: root.session.pinnedFilters
+                    delegate: FilterRow {
+                        required property string modelData
+                        width: treeList.width
+                        label: modelData
+                        query: modelData
+                        glyph: "★"
+                        filterKind: "pinned"
+                    }
+                }
+
+                SidebarSubHeader {
+                    visible: root.session.savedFilters.length > 0
+                    width: treeList.width
+                    text: "Saved"
+                }
+
+                Repeater {
+                    model: root.session.savedFilters
+                    delegate: FilterRow {
+                        required property var modelData
+                        width: treeList.width
+                        label: modelData.name
+                        query: modelData.query
+                        glyph: "▣"
+                        filterKind: "saved"
+                    }
+                }
+
                 GroupHeader { text: "Files" }
 
                 Repeater {
@@ -268,6 +316,133 @@ Rectangle {
             font.pixelSize: Theme.uiSize
             color: Theme.secondaryLabel
             opacity: 0.75
+        }
+    }
+
+    // Small indented label for Favorites subgroups ("Pinned"/"Saved").
+    component SidebarSubHeader: Item {
+        id: subHeader
+
+        property string text
+
+        width: parent ? parent.width : 0
+        height: 22
+
+        Text {
+            anchors.left: parent.left
+            anchors.leftMargin: 26
+            anchors.verticalCenter: parent.verticalCenter
+            text: subHeader.text
+            font.family: Theme.uiFont
+            font.pixelSize: Theme.uiSmall
+            font.weight: Font.DemiBold
+            color: Theme.secondaryLabel
+            opacity: 0.8
+        }
+    }
+
+    // A pinned expression or a named saved filter in the sidebar. Clicking
+    // applies it and switches to the packet workspace (upstream: selecting a
+    // saved filter forces workspaceMode .packets); the hover affordance
+    // removes it from the Favorites group.
+    component FilterRow: Item {
+        id: filterRow
+
+        property string label
+        property string query
+        property string glyph
+        property string filterKind // "pinned" | "saved"
+
+        readonly property bool selected: root.captureMode === "packets"
+            && root.session.filterText === filterRow.query
+        readonly property bool hovered: rowMouse.containsMouse
+
+        height: Theme.sidebarRowHeight
+
+        function apply() {
+            if (root.captureMode !== "packets")
+                root.requestMode("packets")
+            root.session.applyFilter(filterRow.query)
+        }
+
+        function remove() {
+            if (filterRow.filterKind === "pinned")
+                root.session.unpinFilter(filterRow.query)
+            else
+                root.session.removeSavedFilter(filterRow.label)
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.leftMargin: 8
+            anchors.rightMargin: 8
+            radius: 6
+            // Active favorites use the quick-filter chip tint instead of the
+            // solid source-selection blue: a favorite marks the active display
+            // filter, while blue still means the selected packet source.
+            color: filterRow.selected
+                ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.15)
+                : (filterRow.hovered ? Qt.rgba(Theme.label.r, Theme.label.g, Theme.label.b, 0.06)
+                                     : "transparent")
+        }
+
+        MouseArea {
+            id: rowMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            acceptedButtons: Qt.LeftButton
+            onClicked: filterRow.apply()
+        }
+
+        Text {
+            id: rowGlyph
+            anchors.left: parent.left
+            anchors.leftMargin: 26
+            anchors.verticalCenter: parent.verticalCenter
+            text: filterRow.glyph
+            font.family: Theme.uiFont
+            font.pixelSize: 10
+            color: filterRow.selected
+                ? Theme.accent
+                : (filterRow.filterKind === "pinned" ? Theme.systemOrange : Theme.systemBlue)
+        }
+
+        Text {
+            anchors.left: rowGlyph.right
+            anchors.leftMargin: 7
+            anchors.right: removeGlyph.left
+            anchors.rightMargin: 8
+            anchors.verticalCenter: parent.verticalCenter
+            text: filterRow.label
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            font.family: filterRow.filterKind === "pinned" ? Theme.monoFont : Theme.uiFont
+            font.pixelSize: Theme.uiSize
+            color: filterRow.selected ? Theme.accent : Theme.label
+
+            ToolTip.visible: filterRow.filterKind === "saved"
+                && filterRow.hovered && filterRow.query !== filterRow.label
+            ToolTip.text: filterRow.query
+            ToolTip.delay: 600
+        }
+
+        Text {
+            id: removeGlyph
+            anchors.right: parent.right
+            anchors.rightMargin: 18
+            anchors.verticalCenter: parent.verticalCenter
+            text: "×"
+            font.pixelSize: 12
+            color: filterRow.selected
+                ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.75)
+                : Theme.secondaryLabel
+            opacity: filterRow.hovered ? 1 : 0
+
+            MouseArea {
+                anchors.fill: parent
+                anchors.margins: -6
+                onClicked: filterRow.remove()
+            }
         }
     }
 
