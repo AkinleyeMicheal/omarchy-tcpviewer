@@ -8,10 +8,10 @@ Licensed under the GNU General Public License version 2 or any later version
 (GPL-2.0-or-later), in line with the upstream license and its use of the
 Wireshark libraries.
 
-Portions of this project (PcapPlusPlusCore and related capture/dissection
-code) are derived from TCP Viewer by Proxyman LLC, used under the terms of
-the GPL-2.0-or-later license. Original copyright headers are preserved in
-all derived source files.
+Portions of this project (PcapPlusPlusCore, TCPViewerSession and related
+capture/dissection code) are derived from TCP Viewer by Proxyman LLC, used
+under the terms of the GPL-2.0-or-later license. Original copyright headers
+are preserved in all derived source files.
 
 Third-party components:
 - Wireshark libraries (libwireshark, libwiretap, libwsutil) — GPL-2.0-or-later

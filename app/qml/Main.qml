@@ -681,7 +681,7 @@ ApplicationWindow {
         id: openDialog
         title: "Open Capture"
         fileMode: FileDialog.OpenFiles
-        nameFilters: ["Capture files (*.pcap *.pcapng)", "All files (*)"]
+        nameFilters: ["Capture files (*.pcap *.pcapng *.cap)", "TCPViewer session (*.tcpviewsession)", "All files (*)"]
         onAccepted: session.importFiles(selectedFiles)
     }
 
@@ -707,8 +707,8 @@ ApplicationWindow {
         id: exportSessionDialog
         title: "Export Session"
         fileMode: FileDialog.SaveFile
-        defaultSuffix: "tcpviewersession"
-        nameFilters: ["TCPViewer session (*.tcpviewersession)"]
+        defaultSuffix: "tcpviewsession"
+        nameFilters: ["TCPViewer session (*.tcpviewsession)"]
         onAccepted: session.exportSession(fileDialogPath(selectedFile))
     }
 

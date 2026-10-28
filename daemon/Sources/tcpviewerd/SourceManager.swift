@@ -14,6 +14,7 @@ import Foundation
 import PcapPlusPlusCore
 import TCPViewerIPC
 import TCPViewerOverview
+import TCPViewerSession
 
 /// Error that already carries a wire error code + client-safe message.
 struct SourceError: Error {
@@ -392,8 +393,22 @@ final class SourceManager: @unchecked Sendable {
     ) {
         queue.async {
             self.importCancellationRequested = false
+            // Upstream rule: a session file imports alone — never merged with
+            // other capture files (WorkspaceFoundation import policy).
+            let sessionPaths = paths.filter { Self.isSessionPath($0) }
+            if !sessionPaths.isEmpty, paths.count > 1 {
+                return completion(.failure(PayloadError(
+                    code: IPCError.appCommandFailed,
+                    message: "Open one TCPViewer session at a time. Sessions cannot be merged with other capture files.",
+                    data: ["failed_path": .string(sessionPaths[0])]
+                )))
+            }
             self.importNextFile(paths: paths, index: 0, imported: [], completion: completion)
         }
+    }
+
+    static func isSessionPath(_ path: String) -> Bool {
+        URL(fileURLWithPath: path).pathExtension.lowercased() == TCPViewSessionFormat.fileExtension
     }
 
     func cancelImports(completion: @escaping (Result<[String: IPCValue], Error>) -> Void) {
@@ -484,6 +499,11 @@ final class SourceManager: @unchecked Sendable {
             }
 
             let url = URL(fileURLWithPath: resolved)
+            if Self.isSessionPath(resolved) {
+                self.importSessionFile(resolved: resolved, url: url, completion: completion)
+                return
+            }
+
             self.core.openOfflineCaptureDocument(at: url) { result in
                 self.queue.async {
                     switch result {
@@ -501,42 +521,86 @@ final class SourceManager: @unchecked Sendable {
                             )))
                             return
                         }
-                        let source = Source(
-                            id: UUID().uuidString.lowercased(),
-                            kind: .offline,
-                            offlineDocument: document,
-                            filePath: resolved,
-                            phase: OfflineCaptureDocumentPhase.opening.rawValue
-                        )
-                        source.isOfflineLoading = true
-                        self.attach(source: source)
-                        self.sources.append(source)
-                        self.emit(.sourcesChanged, data: ["source_id": .string(source.id), "action": .string("opened")])
-
-                        document.open { openResult in
-                            self.queue.async {
-                                source.isOfflineLoading = false
-                                switch openResult {
-                                case .failure(let error):
-                                    // Keep the failed source listed with its phase so the
-                                    // client sees why; packets stay empty.
-                                    source.phase = OfflineCaptureDocumentPhase.failed.rawValue
-                                    source.statusMessage = String(describing: error)
-                                    self.emit(.sourcesChanged, data: ["source_id": .string(source.id), "action": .string("failed")])
-                                    completion(.failure(error))
-                                case .success(let summaries):
-                                    // Authoritative full list (matches upstream final
-                                    // packetCache.set) — event batches streamed before this.
-                                    source.summaries = summaries
-                                    source.phase = OfflineCaptureDocumentPhase.loaded.rawValue
-                                    source.statusMessage = "Loaded \(summaries.count) packets."
-                                    source.resetIndexes()
-                                    self.emit(.sourcesChanged, data: ["source_id": .string(source.id), "action": .string("loaded")])
-                                    completion(.success(source))
-                                }
-                            }
-                        }
+                        self.beginOfflineOpen(source: self.makeOfflineSource(resolved: resolved, document: document), document: document, completion: completion)
                     }
+                }
+            }
+        }
+    }
+
+    /// Builds the source shell for an offline document (same shape upstream).
+    private func makeOfflineSource(resolved: String, document: any OfflineCaptureDocumentProviding) -> Source {
+        let source = Source(
+            id: UUID().uuidString.lowercased(),
+            kind: .offline,
+            offlineDocument: document,
+            filePath: resolved,
+            phase: OfflineCaptureDocumentPhase.opening.rawValue
+        )
+        source.isOfflineLoading = true
+        return source
+    }
+
+    /// Attach + open + completion handling shared by pcap and session imports.
+    private func beginOfflineOpen(
+        source: Source,
+        document: any OfflineCaptureDocumentProviding,
+        completion: @escaping (Result<Source, Error>) -> Void
+    ) {
+        self.attach(source: source)
+        self.sources.append(source)
+        self.emit(.sourcesChanged, data: ["source_id": .string(source.id), "action": .string("opened")])
+
+        document.open { openResult in
+            self.queue.async {
+                source.isOfflineLoading = false
+                switch openResult {
+                case .failure(let error):
+                    // Keep the failed source listed with its phase so the
+                    // client sees why; packets stay empty.
+                    source.phase = OfflineCaptureDocumentPhase.failed.rawValue
+                    source.statusMessage = String(describing: error)
+                    self.emit(.sourcesChanged, data: ["source_id": .string(source.id), "action": .string("failed")])
+                    completion(.failure(error))
+                case .success(let summaries):
+                    // Authoritative full list (matches upstream final
+                    // packetCache.set) — event batches streamed before this.
+                    source.summaries = summaries
+                    source.phase = OfflineCaptureDocumentPhase.loaded.rawValue
+                    source.statusMessage = "Loaded \(summaries.count) packets."
+                    source.resetIndexes()
+                    self.emit(.sourcesChanged, data: ["source_id": .string(source.id), "action": .string("loaded")])
+                    completion(.success(source))
+                }
+            }
+        }
+    }
+
+    /// Opens an imported .tcpviewsession bundle as a new offline source
+    /// (upstream TCPViewSessionImportService flow: load + sanitize + wrapper).
+    private func importSessionFile(
+        resolved: String,
+        url: URL,
+        completion: @escaping (Result<Source, Error>) -> Void
+    ) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let loadResult = Result { try SessionPackage.loadPackage(at: url) }
+            self.queue.async {
+                switch loadResult {
+                case .failure(let error):
+                    completion(.failure(error))
+                case .success(let contents):
+                    // Same cancel-vs-fresh-document race guard as pcap imports.
+                    if self.importCancellationRequested {
+                        try? FileManager.default.removeItem(at: contents.extractionDirectoryURL)
+                        completion(.failure(SourceError(
+                            code: IPCError.operationCancelled,
+                            message: "Import was cancelled."
+                        )))
+                        return
+                    }
+                    let document = SessionBundleDocument(contents: contents, core: self.core)
+                    self.beginOfflineOpen(source: self.makeOfflineSource(resolved: resolved, document: document), document: document, completion: completion)
                 }
             }
         }
@@ -1342,8 +1406,36 @@ final class SourceManager: @unchecked Sendable {
                 }
             }
 
-            // Offline: native document save (writes the loaded capture back).
+            // Offline: native document save (writes the loaded capture back);
+            // a .tcpviewsession destination bundles the staged capture with
+            // the sidecars instead (upstream TCPViewSessionExportService).
+            // Session documents are read-only, so their capture bytes come
+            // from the inner document either way.
             if let document = source.offlineDocument {
+                if let bundleDocument = document as? SessionBundleDocument {
+                    if destination.hasSuffix(".\(TCPViewSessionFormat.fileExtension)") {
+                        self.exportSessionBundle(
+                            source: source,
+                            document: document,
+                            url: url,
+                            destination: destination,
+                            completion: completion
+                        )
+                    } else {
+                        bundleDocument.stageInnerCapture(to: url, completion: finish)
+                    }
+                    return
+                }
+                if destination.hasSuffix(".\(TCPViewSessionFormat.fileExtension)") {
+                    self.exportSessionBundle(
+                        source: source,
+                        document: document,
+                        url: url,
+                        destination: destination,
+                        completion: completion
+                    )
+                    return
+                }
                 document.save(to: url, format: .pcapng, completion: finish)
                 return
             }
@@ -1357,6 +1449,68 @@ final class SourceManager: @unchecked Sendable {
                 shouldCancel: nil,
                 completion: finish
             )
+        }
+    }
+
+    /// Offline .tcpviewsession export: stages the capture via a document save,
+    /// then writes the ZIP bundle (packets + sidecars) atomically. Session
+    /// sources re-export their own carried state; regular offline sources
+    /// get the daemon's minimal state (app-state round-trip is a later phase).
+    private func exportSessionBundle(
+        source: Source,
+        document: any OfflineCaptureDocumentProviding,
+        url: URL,
+        destination: String,
+        completion: @escaping (Result<[String: IPCValue], Error>) -> Void
+    ) {
+        let bundleDocument = document as? SessionBundleDocument
+        let state: TCPViewSessionState = bundleDocument?.contents.state
+            ?? TCPViewSessionState(sourceMetadata: TCPViewSessionSourceMetadata(
+                fileName: source.filePath.map { URL(fileURLWithPath: $0).lastPathComponent },
+                filePath: source.filePath,
+                format: CaptureFileFormat.pcapng.rawValue,
+                packetCount: source.summaries.count
+            ))
+
+        let stageURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TCPViewSessionExport-\(UUID().uuidString).pcapng")
+        let stageFinished: TCPViewerVoidCompletion = { result in
+            self.queue.async {
+                switch result {
+                case .failure(let error):
+                    try? FileManager.default.removeItem(at: stageURL)
+                    completion(.failure(error))
+                case .success:
+                    let captureData = (try? Data(contentsOf: stageURL)) ?? Data()
+                    try? FileManager.default.removeItem(at: stageURL)
+                    do {
+                        try SessionPackage.writePackage(
+                            packets: source.summaries,
+                            captureFileData: captureData,
+                            state: state,
+                            to: url
+                        )
+                        completion(.success([
+                            "path": .string(destination),
+                            "format": .string(TCPViewSessionFormat.fileExtension),
+                            "packet_count": .int(source.summaries.count),
+                            "bytes": .int((try? FileManager.default.attributesOfItem(atPath: destination)[.size] as? Int) ?? 0),
+                        ]))
+                    } catch {
+                        let message = (error as? TCPViewerCoreError)?.message ?? String(describing: error)
+                        completion(.failure(PayloadError(
+                            code: IPCError.appCommandFailed,
+                            message: message,
+                            data: nil
+                        )))
+                    }
+                }
+            }
+        }
+        if let bundleDocument {
+            bundleDocument.stageInnerCapture(to: stageURL, completion: stageFinished)
+        } else {
+            document.save(to: stageURL, format: .pcapng, completion: stageFinished)
         }
     }
 

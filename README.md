@@ -108,13 +108,15 @@ want a full cleanup.
 | libwireshark, libwiretap, libwsutil + headers | Packet dissection (GPL) | `wireshark-cli` |
 | GLib 2.0 + GObject | Wireshark library support | `glib2` |
 | libpcap | Packet capture | `libpcap` |
+| zlib (system) | Session-bundle ZIP layer (`-lz`) | `zlib` (in base) |
 | Quickshell | Omarchy shell plugin runtime | ships with Omarchy |
 
 Vendored/derived upstream code (GPL-2.0-or-later): Proxyman's **TCPViewer**
-capture core and Overview engine (ported as `PcapPlusPlusCore` /
-`TCPViewerOverview`), their Apple-centric platform shims replaced with
-Linux equivalents; plus one vendored file from Wireshark's `ipaddr`
-(`daemon/vendor/ipaddr/ipaddr.c`). See [NOTICE](NOTICE).
+capture core, Overview engine and session-bundle format (ported as
+`PcapPlusPlusCore` / `TCPViewerOverview` / `TCPViewerSession`), their
+Apple-centric platform shims replaced with Linux equivalents; plus one vendored
+file from Wireshark's `ipaddr` (`daemon/vendor/ipaddr/ipaddr.c`). See
+[NOTICE](NOTICE).
 
 ## Build for development
 
@@ -203,6 +205,17 @@ page header.
   and apply with one click; the row's × removes them.
 
 ![Structured filter builder](docs/filter-builder.png)
+
+## Session files
+
+Captures can be saved as a `.tcpviewsession` bundle (**Export Session** in the
+toolbar / `file.export_session` in the CLI) and reopened later — the file
+carries the packets, the backing pcapng, annotations (comments and highlight
+colors), client records and workspace state, mirroring upstream TCP Viewer's
+session format. Sessions are read-only once saved: export packets or create a
+new session instead of re-saving. A session opens by itself — it cannot be
+merged with other capture files in one import. The format is
+byte-compatible with the macOS app, so files interchange both ways.
 
 ## Diff
 

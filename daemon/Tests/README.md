@@ -2,7 +2,10 @@
 
 `PcapPlusPlusCoreTests` is the upstream `PcapPlusPlusCoreTests` suite (Swift
 Testing) ported unchanged where possible. It is our regression gate for the
-capture/dissection core; `TCPViewerIPCTests` covers the daemon's IPC layer.
+capture/dissection core; `TCPViewerIPCTests` covers the daemon's IPC layer;
+`TCPViewerSessionTests` covers the `.tcpviewsession` bundle layer (ZIP
+round-trip, path safety, record sanitization, manifest validation) and
+`TCPViewerOverviewTests` the overview engine.
 
 ## Always run with `--no-parallel`
 

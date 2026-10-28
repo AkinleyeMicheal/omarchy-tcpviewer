@@ -10,6 +10,7 @@
 
 import Foundation
 import TCPViewerIPC
+import TCPViewerSession
 
 enum SourceSecurity {
     private static let maxPathLength = 4_096
@@ -18,10 +19,11 @@ enum SourceSecurity {
     static func validatedImportPath(_ raw: String) throws -> String {
         let path = try commonChecks(raw)
 
-        guard path.hasSuffix(".pcap") || path.hasSuffix(".pcapng") || path.hasSuffix(".cap") else {
+        guard path.hasSuffix(".pcap") || path.hasSuffix(".pcapng") || path.hasSuffix(".cap")
+                || path.hasSuffix(".\(TCPViewSessionFormat.fileExtension)") else {
             throw SourceError(
                 code: IPCError.invalidParams,
-                message: "unsupported capture format (want .pcap or .pcapng)"
+                message: "unsupported capture format (want .pcap, .pcapng, .cap or .tcpviewsession)"
             )
         }
         var isDirectory: ObjCBool = false

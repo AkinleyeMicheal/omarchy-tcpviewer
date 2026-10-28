@@ -118,4 +118,33 @@ Port behavior notes:
 - Regression gate: the upstream `PcapPlusPlusCoreTests` suite is ported
   into `daemon/Tests/PcapPlusPlusCoreTests` and must run with
   `swift test --no-parallel` (the epan session is process-global; parallel
-  suites contend it). 154 core tests + 12 IPC tests pass.
+  suites contend it). 166 core + 18 overview + 12 IPC + 10 session
+  tests pass.
+
+Session-bundle decision (Phase B slice 2, 2026-10-28):
+
+- The `.tcpviewsession` format is a ZIP archive rooted at `TCPViewerSession/`
+  (manifest.json, capture.pcapng, packets.jsonl, clients.json,
+  annotations.json, state.json, icons/). Record shapes are byte-compatible
+  with the macOS app so files interchange both ways.
+- Upstream uses ZIPFoundation. The daemon implements the needed ZIP subset on
+  the system zlib through a `CZlib` systemLibrary target (`-lz`): reader =
+  EOCD scan + central-directory parse + stored(0)/deflate(8) extraction with
+  CRC verification; writer = deflated payloads, stored directory entries,
+  atomic temp-file replace. No ZIP64, encryption, data descriptors or
+  streaming; no new external dependency (zlib ships in the base system).
+- Import mirrors upstream `TCPViewSessionImportService`: archive path safety
+  before extraction (no absolute paths, no `..`, no symlinks, all entries
+  under `TCPViewerSession/`), manifest validation (magic + schema version),
+  record sanitization (packetID == packet.id, captureOrdinal range and
+  uniqueness, known clientIDs) with upstream's failedFlowCount accounting,
+  annotation rehydration. Session files import alone (upstream rule).
+- The source wraps an inner pcapng document (`SessionBundleDocument`):
+  inspect/follow/export run against the inner capture with session↔inner
+  packet-ID remapping (position-based by captureOrdinal, inner followStreamID
+  applied); display filters forward to the inner document with
+  ID-translated result batches; `save` reports the upstream read-only error.
+- state.json is authored minimal-but-valid by the daemon (empty
+  pins/savedPackets/customFilters/importedFiles + default quick-filter and
+  structured-filter records) and passes through unsanitized on import until
+  the app-state round-trip phase; upstream still reads our files.

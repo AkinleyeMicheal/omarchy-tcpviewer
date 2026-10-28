@@ -65,10 +65,28 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
 
+        // System zlib interop for the session-bundle ZIP layer (stands in
+        // for upstream's ZIPFoundation; no new external dependency beyond
+        // the libz every distro ships).
+        .systemLibrary(
+            name: "CZlib"
+        ),
+
+        // .tcpviewsession ZIP bundle read/write (upstream TCPViewSession
+        // format: manifest + pcapng + JSON sidecars).
+        .target(
+            name: "TCPViewerSession",
+            dependencies: ["PcapPlusPlusCore", "CZlib"],
+            swiftSettings: [.swiftLanguageMode(.v5)],
+            linkerSettings: [
+                .linkedLibrary("z"),
+            ]
+        ),
+
         // The daemon: owns capture sources, runs the Unix-socket JSON server.
         .executableTarget(
             name: "tcpviewerd",
-            dependencies: ["PcapPlusPlusCore", "TCPViewerIPC", "TCPViewerOverview"],
+            dependencies: ["PcapPlusPlusCore", "TCPViewerIPC", "TCPViewerOverview", "TCPViewerSession"],
             swiftSettings: [.swiftLanguageMode(.v5)],
             linkerSettings: [
                 .linkedLibrary("wireshark"),
@@ -99,6 +117,23 @@ let package = Package(
         .testTarget(
             name: "TCPViewerOverviewTests",
             dependencies: ["TCPViewerOverview"],
+            swiftSettings: [.swiftLanguageMode(.v5)],
+            linkerSettings: [
+                .linkedLibrary("wireshark"),
+                .linkedLibrary("wiretap"),
+                .linkedLibrary("wsutil"),
+                .linkedLibrary("glib-2.0"),
+                .linkedLibrary("gobject-2.0"),
+                .linkedLibrary("gmodule-2.0"),
+                .linkedLibrary("pcap"),
+            ]
+        ),
+
+        // Session-bundle format tests: ZIP round-trip + record codecs
+        // (parity gate for .tcpviewsession export/import).
+        .testTarget(
+            name: "TCPViewerSessionTests",
+            dependencies: ["TCPViewerSession"],
             swiftSettings: [.swiftLanguageMode(.v5)],
             linkerSettings: [
                 .linkedLibrary("wireshark"),
