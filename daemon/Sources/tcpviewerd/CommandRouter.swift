@@ -266,9 +266,14 @@ final class CommandRouter: @unchecked Sendable {
         case .fileImport:
             do {
                 let paths = try request.requirePathList()
-                importSequentially(paths: paths, index: 0, imported: [], completion: respond)
+                manager.importFilesSequentially(paths: paths, completion: respond)
             } catch {
                 respond(.failure(error))
+            }
+
+        case .importCancel:
+            manager.cancelImports { result in
+                respond(result)
             }
 
         case .fileExport:
@@ -312,40 +317,6 @@ final class CommandRouter: @unchecked Sendable {
             let enabled = request.bool("enabled") ?? true
             setSubscription(enabled)
             respond(.success(["events": .bool(enabled)]))
-        }
-    }
-
-    // MARK: - Sequential import (partial results reported in error data)
-
-    private func importSequentially(
-        paths: [String],
-        index: Int,
-        imported: [String],
-        completion: @escaping (Result<[String: IPCValue], Error>) -> Void
-    ) {
-        guard index < paths.count else {
-            return completion(.success([
-                "imported": .array(imported.map { .string($0) }),
-                "source_count": .int(imported.count),
-            ]))
-        }
-        manager.importFile(path: paths[index]) { result in
-            switch result {
-            case .success:
-                var rows = imported
-                rows.append(paths[index])
-                self.importSequentially(paths: paths, index: index + 1, imported: rows, completion: completion)
-            case .failure(let error):
-                // Upstream parity: partial imports keep their file info in the
-                // error response so clients know what did make it in.
-                var data = [String: IPCValue]()
-                if !imported.isEmpty {
-                    data["imported"] = .array(imported.map { .string($0) })
-                }
-                data["failed_path"] = .string(paths[index])
-                let mapped = self.wireError(error)
-                completion(.failure(PayloadError(code: mapped.code, message: mapped.message, data: data)))
-            }
         }
     }
 
@@ -629,12 +600,6 @@ final class CommandRouter: @unchecked Sendable {
     }
 
     // MARK: - Error mapping
-
-    struct PayloadError: Error {
-        let code: String
-        let message: String
-        let data: [String: IPCValue]?
-    }
 
     private func wireError(_ error: Error) -> (code: String, message: String) {
         if let error = error as? PayloadError {

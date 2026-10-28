@@ -34,6 +34,9 @@ class SessionController : public QObject
     Q_PROPERTY(QVariantList sources READ sources NOTIFY sourcesChanged)
     Q_PROPERTY(QVariantMap status READ status NOTIFY statusChanged)
     Q_PROPERTY(QVariantMap loadProgress READ loadProgress NOTIFY statusChanged)
+    // Multi-file import progress: {"files": requested, "loaded": finished}.
+    // Drives the "Loading file k of N…" status text (upstream importer).
+    Q_PROPERTY(QVariantMap importProgress READ importProgress NOTIFY sourcesChanged)
     Q_PROPERTY(bool capturing READ capturing NOTIFY statusChanged)
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
     Q_PROPERTY(int totalCount READ totalCount NOTIFY totalCountChanged)
@@ -59,6 +62,8 @@ class SessionController : public QObject
     Q_PROPERTY(QVariantList savedFilters READ savedFilters NOTIFY filtersChanged)
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorTextChanged)
     Q_PROPERTY(bool loading READ loading NOTIFY loadingChanged)
+    // True while an import chain is in flight (gates the Cancel button).
+    Q_PROPERTY(bool importing READ importing NOTIFY sourcesChanged)
     Q_PROPERTY(QString capturePhase READ capturePhase NOTIFY statusChanged)
     // Overview page aggregates from capture.overview; QML refreshes while the
     // page is visible (the daemon caches per source revision).
@@ -87,6 +92,8 @@ public:
     QVariantList sources() const { return m_sources; }
     QVariantMap status() const { return m_status; }
     QVariantMap loadProgress() const { return m_status.value(QStringLiteral("load_progress")).toMap(); }
+    QVariantMap importProgress() const;
+    bool importing() const { return !m_importPaths.isEmpty(); }
     bool capturing() const;
     bool connected() const;
     int totalCount() const { return m_totalCount; }
@@ -102,7 +109,10 @@ public:
     QStringList pinnedFilters() const { return m_pinnedFilters; }
     QVariantList savedFilters() const { return m_savedFilters; }
     QString errorText() const { return m_errorText; }
-    bool loading() const { return m_loading; }
+    // Loading state: explicit setLoading() calls OR an import chain in
+    // flight (packet pages of an auto-selected file would otherwise clear
+    // m_loading mid-chain and hide the cancel affordance).
+    bool loading() const { return m_loading || importing(); }
     QString capturePhase() const { return m_status.value(QStringLiteral("phase")).toString(); }
     QVariantMap overview() const { return m_overview; }
     bool overviewLoading() const { return m_overviewLoading; }
@@ -115,6 +125,9 @@ public:
     Q_INVOKABLE void pauseCapture();
     Q_INVOKABLE void resumeCapture();
     Q_INVOKABLE void importFiles(const QVariantList &urls);
+    // Aborts an in-flight import chain: daemon cancels the current file's
+    // document load, drops the loading sources and stops the remaining files.
+    Q_INVOKABLE void cancelImport();
     Q_INVOKABLE void reportError(const QString &message);
     // Clipboard/file helpers used by Overview "Share" actions (upstream
     // Share menu: Copy as Markdown / Save as Markdown).
@@ -234,6 +247,8 @@ private:
     QHash<QString, qint64> m_lastStreamTimestamp;
     int m_pageSize = 5000;
     QStringList m_pendingOpenFiles;
+    // Paths of the import chain in flight (multi-file progress display).
+    QStringList m_importPaths;
     QString m_selectedPacketID;
     // CI hook: TCPVIEWER_CAPTURE_IFACE starts live capture after startup.
     QString m_startupCaptureIface;

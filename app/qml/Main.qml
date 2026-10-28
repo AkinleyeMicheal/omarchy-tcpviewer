@@ -223,6 +223,9 @@ ApplicationWindow {
             return "Connecting to tcpviewerd…"
         if (session.capturing)
             return "Capturing on " + String(session.status.interface || session.selectedInterface || "interface")
+        if (session.importing && session.importProgress.files > 1)
+            return "Loading file " + Math.min(session.importProgress.loaded + 1, session.importProgress.files)
+                   + " of " + session.importProgress.files + "…"
         if (session.currentSourceID !== "") {
             if (session.status.kind === "offline")
                 return session.loading ? "Loading capture…" : "Loaded"
@@ -467,6 +470,16 @@ ApplicationWindow {
                 color: Theme.secondaryLabel
             }
 
+            // Import cancellation (upstream importer sheet): stops the
+            // in-flight document load and the remaining queued files.
+            ToolbarButton {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Cancel"
+                tooltip: "Cancel the running import"
+                visible: session.importing
+                onClicked: session.cancelImport()
+            }
+
             BusyIndicator {
                 anchors.verticalCenter: parent.verticalCenter
                 width: 16
@@ -697,6 +710,44 @@ ApplicationWindow {
         defaultSuffix: "tcpviewersession"
         nameFilters: ["TCPViewer session (*.tcpviewersession)"]
         onAccepted: session.exportSession(fileDialogPath(selectedFile))
+    }
+
+    // Drag & drop capture files (upstream registers fileURL drops on the root
+    // view and routes them through the same importer as the open panel).
+    // Allowed: .pcap/.pcapng/.cap now; .tcpviewsession joins with session
+    // import. A session file always opens alone, never with captures mixed in.
+    function importableURLs(urls) {
+        var allowed = ["pcap", "pcapng", "cap"]
+        var paths = []
+        var sessions = 0
+        for (var i = 0; i < urls.length; ++i) {
+            var path = window.fileDialogPath(urls[i])
+            var suffix = path.split(".").pop().toLowerCase()
+            if (suffix === "tcpviewsession")
+                sessions += 1
+            else if (allowed.indexOf(suffix) === -1)
+                continue
+            paths.push(path)
+        }
+        if (sessions > 0 && (sessions !== paths.length || sessions > 1))
+            return null
+        return paths.length > 0 ? paths : null
+    }
+
+    DropArea {
+        anchors.fill: parent
+        onDropped: (drop) => {
+            if (!drop.hasUrls)
+                return
+            var paths = window.importableURLs(drop.urls)
+            if (paths === null) {
+                session.reportError("A TCPViewer session file must open by itself.")
+                drop.accepted = false
+                return
+            }
+            if (paths.length > 0)
+                session.importFiles(paths)
+        }
     }
 
     // Bench + dialog helpers: inline components resolve document ids
@@ -1081,6 +1132,14 @@ ApplicationWindow {
                             font.family: Theme.uiFont
                             font.pixelSize: Theme.uiSize
                             color: Theme.secondaryLabel
+                        }
+
+                        ToolbarButton {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: "Cancel"
+                            tooltip: "Stop loading this capture"
+                            visible: session.importing
+                            onClicked: session.cancelImport()
                         }
                     }
 

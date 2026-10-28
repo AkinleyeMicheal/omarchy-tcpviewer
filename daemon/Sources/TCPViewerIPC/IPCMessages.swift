@@ -25,6 +25,7 @@ public enum IPCError {
     public static let ioError = "io_error"
     public static let timeout = "timeout"
     public static let appCommandFailed = "app_command_failed"
+    public static let operationCancelled = "operation_cancelled"
 }
 
 public enum IPCLimits {

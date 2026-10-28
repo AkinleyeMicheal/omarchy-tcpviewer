@@ -32,6 +32,10 @@ public final class NativeOfflineCaptureDocument: OfflineCaptureDocumentProviding
         state.cancelLoading(completion: completion)
     }
 
+    public func waitUnload(completion: @escaping () -> Void) {
+        state.waitUnload(completion: completion)
+    }
+
     public func inspectPacket(id: PacketSummary.ID, completion: @escaping TCPViewerCompletion<PacketInspection>) {
         state.inspectPacket(id: id, completion: completion)
     }
@@ -254,6 +258,26 @@ private final class NativeOfflineCaptureDocumentState: @unchecked Sendable {
         stateQueue.async {
             self.activeLoad?.cancellationFlag.cancel()
             completion?()
+        }
+    }
+
+    func waitUnload(completion: @escaping () -> Void) {
+        stateQueue.async {
+            self.activeLoad?.cancellationFlag.cancel()
+            self.pollUnload(completion)
+        }
+    }
+
+    /// Completes once no load is active. The poll retains the state so the
+    /// loader's finish hop (weak self) still lands and clears `activeLoad`
+    /// instead of leaving the epan handle registered for the wmem teardown.
+    private func pollUnload(_ completion: @escaping () -> Void) {
+        if self.activeLoad == nil {
+            completion()
+        } else {
+            self.stateQueue.asyncAfter(deadline: .now() + 0.05) {
+                self.pollUnload(completion)
+            }
         }
     }
 

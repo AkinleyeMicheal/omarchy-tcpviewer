@@ -47,6 +47,10 @@ public enum IPCCommand: String, Codable, CaseIterable {
     case fileExport = "file.export"
     case fileExportSession = "file.export_session"
 
+    /// Abort an in-flight `file.import` chain (cancel current file and stop
+    /// loading the remaining ones). New in our schema.
+    case importCancel = "import.cancel"
+
     /// Opt this connection into async events (params: enabled bool, default
     /// true). New in our schema: upstream's file transport had no push.
     case eventsSubscribe = "events.subscribe"

@@ -162,6 +162,11 @@ public protocol OfflineCaptureDocumentProviding: StreamFollowing, DisplayFilterE
     func open(completion: @escaping TCPViewerCompletion<[PacketSummary]>)
     func reopen(completion: @escaping TCPViewerCompletion<[PacketSummary]>)
     func cancelLoading(completion: (() -> Void)?)
+    /// Cancels any in-flight load and completes only once the load machinery
+    /// has unwound (`activeLoad` cleared). Shutdown barrier: the document
+    /// deinit frees the epan handle, which must happen before the wmem
+    /// global-scope teardown or it asserts (`!wmem_in_scope(file_scope)`).
+    func waitUnload(completion: @escaping () -> Void)
     func inspectPacket(id: PacketSummary.ID, completion: @escaping TCPViewerCompletion<PacketInspection>)
     func save(completion: @escaping TCPViewerVoidCompletion)
     func save(to url: URL, format: CaptureFileFormat, completion: @escaping TCPViewerVoidCompletion)
@@ -439,6 +444,10 @@ public final class UnconfiguredOfflineCaptureDocument: OfflineCaptureDocumentPro
 
     public func cancelLoading(completion: (() -> Void)?) {
         completion?()
+    }
+
+    public func waitUnload(completion: @escaping () -> Void) {
+        completion()
     }
 
     public func inspectPacket(id: PacketSummary.ID, completion: @escaping TCPViewerCompletion<PacketInspection>) {

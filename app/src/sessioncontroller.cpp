@@ -133,6 +133,18 @@ void SessionController::start()
     if (!openFiles.isEmpty())
         m_pendingOpenFiles = openFiles.split(QLatin1Char(';'), Qt::SkipEmptyParts);
 
+    // CI/test hook: cancel the startup import after a delay so the cancel
+    // path can be captured offscreen (import starts, button path fires, no
+    // error banner, loading clears).
+    bool cancelHookOk = false;
+    const int cancelHookMs = qEnvironmentVariableIntValue("TCPVIEWER_CANCEL_IMPORT_MS", &cancelHookOk);
+    if (cancelHookOk && cancelHookMs > 0) {
+        QTimer::singleShot(cancelHookMs, this, [this]() {
+            if (importing())
+                cancelImport();
+        });
+    }
+
     // A local socket can connect synchronously, so the pending list must exist
     // before this call.
     m_client->start();
@@ -276,8 +288,45 @@ void SessionController::importFiles(const QVariantList &urls)
 
     setError(QString());
     setLoading(true);
+    // Multi-file progress (upstream importer): remember the requested order;
+    // refreshSources() re-counts finished files as their sources land.
+    m_importPaths = paths;
+    emit sourcesChanged();
     m_client->send(QStringLiteral("file.import"),
                    {{QStringLiteral("paths"), paths}}, 300);
+}
+
+// Upstream importer cancellation: the daemon cancels the in-flight document
+// load, closes the loading sources and skips the remaining files. The
+// follow-up file.import failure arrives as operation_cancelled and is
+// handled silently in handleFailure().
+void SessionController::cancelImport()
+{
+    m_pendingSelectPath.clear();
+    m_importPaths.clear();
+    emit sourcesChanged();
+    emit loadingChanged();
+    m_client->send(QStringLiteral("import.cancel"));
+}
+
+QVariantMap SessionController::importProgress() const
+{
+    QVariantMap progress;
+    progress.insert(QStringLiteral("files"), m_importPaths.size());
+    int loaded = 0;
+    for (const QString &path : m_importPaths) {
+        for (const QVariant &value : m_sources) {
+            const QVariantMap source = value.toMap();
+            if (source.value(QStringLiteral("path")).toString() != path)
+                continue;
+            const QString phase = source.value(QStringLiteral("phase")).toString();
+            if (phase == QStringLiteral("loaded") || phase == QStringLiteral("failed"))
+                ++loaded;
+            break;
+        }
+    }
+    progress.insert(QStringLiteral("loaded"), loaded);
+    return progress;
 }
 
 void SessionController::closeSource(const QString &sourceID)
@@ -694,6 +743,9 @@ void SessionController::handleResponse(const QString &command, const QVariantMap
     if (command == QStringLiteral("file.import")) {
         const QVariantList imported = data.value(QStringLiteral("imported")).toList();
         setLoading(false);
+        m_importPaths.clear();
+        emit sourcesChanged();
+        emit loadingChanged();
         if (!imported.isEmpty())
             m_pendingSelectPath = imported.last().toString();
         refreshSources();
@@ -790,6 +842,22 @@ void SessionController::handleFailure(const QString &command, const QString &cod
         if (!m_currentSourceID.isEmpty())
             selectSourceInternal(QString());
         refreshSources();
+        return;
+    }
+
+    // Import failures end the chain: reset the multi-file state first, then
+    // either stay quiet (user-intended cancel) or surface the error.
+    if (command == QStringLiteral("file.import")) {
+        m_importPaths.clear();
+        emit sourcesChanged();
+        emit loadingChanged();
+        setLoading(false);
+        if (code != QStringLiteral("operation_cancelled")) {
+            setError(message);
+        } else {
+            setError(QString());
+            refreshSources();
+        }
         return;
     }
 

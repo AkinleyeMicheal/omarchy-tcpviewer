@@ -21,6 +21,15 @@ struct SourceError: Error {
     let message: String
 }
 
+/// Failure that carries partial-result data (upstream parity: import errors
+/// report which files did make it in). Defined at file scope so the import
+/// chain in SourceManager and the router's failure mapping share it.
+struct PayloadError: Error {
+    let code: String
+    let message: String
+    let data: [String: IPCValue]?
+}
+
 final class SourceManager: @unchecked Sendable {
     static let daemonVersion = "0.1.0"
 
@@ -219,6 +228,9 @@ final class SourceManager: @unchecked Sendable {
     private let queue = DispatchQueue(label: "org.omarchy.tcpviewerd.SourceManager")
     let core = NativeTCPViewerCore()
     private(set) var sources: [Source] = []
+    /// Set by `import.cancel` and checked between files of an import chain.
+    /// Chains are serialized by the app/CLI callers; a fresh chain resets it.
+    private var importCancellationRequested = false
     /// Fan-out set by SocketServer; called on `queue`.
     var eventSink: ((IPCEventMessage) -> Void)?
 
@@ -368,6 +380,97 @@ final class SourceManager: @unchecked Sendable {
         }
     }
 
+    /// Opens a whole import request sequentially (upstream imports files one
+    /// after another; partial results ride in the error data). Runs the chain
+    /// on `queue` so the cancellation flag is read consistently.
+    ///
+    /// `import.cancel` sets the flag, cancels the in-flight document load and
+    /// closes the loading sources; the next chain start resets it.
+    func importFilesSequentially(
+        paths: [String],
+        completion: @escaping (Result<[String: IPCValue], Error>) -> Void
+    ) {
+        queue.async {
+            self.importCancellationRequested = false
+            self.importNextFile(paths: paths, index: 0, imported: [], completion: completion)
+        }
+    }
+
+    func cancelImports(completion: @escaping (Result<[String: IPCValue], Error>) -> Void) {
+        queue.async {
+            self.importCancellationRequested = true
+            let loading = self.sources.filter { $0.isOfflineLoading }
+            for source in loading {
+                source.offlineDocument?.cancelLoading(completion: nil)
+                self.sources.removeAll { $0.id == source.id }
+                self.emit(.sourcesChanged, data: ["source_id": .string(source.id), "action": .string("closed")])
+            }
+            completion(.success(["cancelled": .int(loading.count)]))
+        }
+    }
+
+    /// Runs on `queue`.
+    private func importNextFile(
+        paths: [String],
+        index: Int,
+        imported: [String],
+        completion: @escaping (Result<[String: IPCValue], Error>) -> Void
+    ) {
+        if importCancellationRequested {
+            var data = [String: IPCValue]()
+            if !imported.isEmpty {
+                data["imported"] = .array(imported.map { .string($0) })
+            }
+            data["failed_path"] = .string(index < paths.count ? paths[index] : "")
+            return completion(.failure(PayloadError(
+                code: IPCError.operationCancelled,
+                message: "Import was cancelled.",
+                data: data
+            )))
+        }
+        guard index < paths.count else {
+            return completion(.success([
+                "imported": .array(imported.map { .string($0) }),
+                "source_count": .int(imported.count),
+            ]))
+        }
+        importFile(path: paths[index]) { result in
+            self.queue.async {
+                switch result {
+                case .success:
+                    var rows = imported
+                    rows.append(paths[index])
+                    self.importNextFile(paths: paths, index: index + 1, imported: rows, completion: completion)
+                case .failure(let error):
+                    // Upstream parity: partial imports keep their file info in
+                    // the error response so clients know what did make it in.
+                    var data = [String: IPCValue]()
+                    if !imported.isEmpty {
+                        data["imported"] = .array(imported.map { .string($0) })
+                    }
+                    data["failed_path"] = .string(paths[index])
+                    let mapped: (code: String, message: String)
+                    if let sourceError = error as? SourceError {
+                        mapped = (sourceError.code, sourceError.message)
+                    } else if let coreError = error as? TCPViewerCoreError {
+                        if coreError.code == .operationCancelled {
+                            mapped = (IPCError.operationCancelled, coreError.message)
+                        } else {
+                            mapped = (IPCError.appCommandFailed, coreError.message)
+                        }
+                    } else {
+                        mapped = (IPCError.appCommandFailed, String(describing: error))
+                    }
+                    completion(.failure(PayloadError(
+                        code: mapped.code,
+                        message: mapped.message,
+                        data: data
+                    )))
+                }
+            }
+        }
+    }
+
     /// Opens an import file as a new offline source (upstream file.import).
     func importFile(path: String, completion: @escaping (Result<Source, Error>) -> Void) {
         queue.async {
@@ -387,6 +490,17 @@ final class SourceManager: @unchecked Sendable {
                     case .failure(let error):
                         completion(.failure(error))
                     case .success(let document):
+                        // A cancel that landed while the document was being
+                        // created must not resurrect the import: the flag is
+                        // only re-checked between files, so drop the fresh
+                        // document here instead of opening it.
+                        if self.importCancellationRequested {
+                            completion(.failure(SourceError(
+                                code: IPCError.operationCancelled,
+                                message: "Import was cancelled."
+                            )))
+                            return
+                        }
                         let source = Source(
                             id: UUID().uuidString.lowercased(),
                             kind: .offline,
@@ -455,7 +569,14 @@ final class SourceManager: @unchecked Sendable {
         let stopped = DispatchGroup()
         queue.sync {
             for source in self.sources {
-                source.offlineDocument?.cancelLoading(completion: nil)
+                if source.kind == .offline {
+                    // Load unwind barrier, not just cancelLoading: that
+                    // completion fires immediately while the load machinery
+                    // still holds the document's epan handle, which asserts
+                    // the wmem global-scope teardown at exit.
+                    stopped.enter()
+                    source.offlineDocument?.waitUnload { stopped.leave() }
+                }
                 if let live = source.liveSession {
                     stopped.enter()
                     live.stop { _ in stopped.leave() }
@@ -464,7 +585,7 @@ final class SourceManager: @unchecked Sendable {
             self.sources.removeAll()
         }
         if stopped.wait(timeout: .now() + timeout) == .timedOut {
-            FileHandle.standardError.write(Data("tcpviewerd: live capture stop timed out\n".utf8))
+            FileHandle.standardError.write(Data("tcpviewerd: capture stop timed out\n".utf8))
         }
         // Give ARC a moment to deallocate documents and free their epan handles
         // while no other thread is dissecting.
