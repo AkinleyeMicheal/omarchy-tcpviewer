@@ -30,10 +30,32 @@ QtObject {
     readonly property color systemTeal: "#30b0c7"
     readonly property color systemBlue: "#007aff"
     readonly property color systemGray: "#8e8e93"
+    readonly property color systemIndigo: "#5856d6"
+    readonly property color systemYellow: "#ffcc00"
+    readonly property color systemBrown: "#a2845e"
+    readonly property color systemMint: "#00c7be"
+
+    // Overview chart palette, in the order used by the upstream protocol
+    // donut and the per-card icon tiles.
+    readonly property var chartColors: [
+        systemBlue, systemCyan, systemPurple, systemOrange, systemGreen,
+        systemPink, systemIndigo, systemTeal, systemYellow, systemMint
+    ]
+
+    function chartColor(index) {
+        var colors = theme.chartColors
+        if (!colors || colors.length === 0)
+            return theme.accent
+        return colors[Math.abs(Number(index) || 0) % colors.length]
+    }
 
     // Typography (SF Pro -> Inter, SF Mono -> JetBrainsMono Nerd Font).
     readonly property string uiFont: "Inter"
     readonly property string monoFont: "JetBrainsMono Nerd Font"
+    // Canvas's font parser wants a family that fontconfig can resolve; the
+    // regular UI falls back from Inter silently, but Canvas warns on every
+    // paint. Liberation Sans is present on Omarchy/Arch and is the fallback.
+    readonly property string canvasFont: "Liberation Sans"
     readonly property int uiSize: 13
     readonly property int uiSmall: 11
     readonly property int uiTitle: 19

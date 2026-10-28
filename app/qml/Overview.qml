@@ -6,12 +6,11 @@ import Omarchy.TCPViewer
 import "OverviewFormat.js" as Format
 
 // Overview page: the aggregate dashboard the owner sees first. Ported from
-// upstream CaptureOverviewViewController/CaptureOverviewDashboardView: a row
-// of metric tiles plus a 3-per-row grid of chart cards (upstream default set:
-// Packets, Throughput, Protocols, Top Apps, Top Domains & IPs, TCP Analysis;
-// Conversations/Services/Packet Lengths wait in the "+" picker). Data comes
-// from capture.overview; the daemon caches per revision and this page polls
-// at 2 s while visible.
+// upstream CaptureOverviewViewController/CaptureOverviewDashboardView: five
+// summary tiles, then a 3-column grid of fixed-height chart cards followed by
+// the in-grid Add Chart cell. The default eight cards are the upstream six
+// defaults plus Top Conversations and Services & Ports, so the Services card
+// is the last chart immediately before Add Chart and the grid stays full.
 Rectangle {
     id: overviewPage
 
@@ -20,18 +19,21 @@ Rectangle {
     // The dashboard hands control back to the packet workspace (upstream:
     // showPacketsFromOverview clears the scope filters and selects All Packets).
     signal requestMode(string mode)
+    signal requestEndpoints()
 
     color: Theme.windowBackground
 
     readonly property var overview: session ? session.overview : ({})
 
-    // Upstream card pool; the defaults match CaptureOverviewCard.defaults.
+    // Upstream card pool. Services is deliberately last in the defaults: it is
+    // the last chart card before the Add Chart cell, as in the current app.
     readonly property var allCards: [
         "packets", "throughput", "protocols", "topApps", "topDestinations",
         "tcpAnalysis", "conversations", "services", "packetLengths",
     ]
     readonly property var defaultCards: [
-        "packets", "throughput", "protocols", "topApps", "topDestinations", "tcpAnalysis",
+        "packets", "throughput", "protocols", "topApps", "topDestinations",
+        "tcpAnalysis", "conversations", "services",
     ]
     property var cards: {
         // Stored picker order; unknown or duplicate entries are skipped later.
@@ -56,46 +58,76 @@ Rectangle {
         }
         return hidden
     }
-    readonly property bool hasData: {
-        var totals = overview.totals ? overview.totals : {}
-        return (Number(totals.packets) || 0) > 0
-    }
 
-    // Chart cards keep a fixed 3-per-row grid under the metric tile row
-    // (first 5 tiles, then rows of 3 with equal gaps), degrading to 2/1
-    // columns only when the content area is too narrow for 3 columns.
-    // Geometry resolves against the CART GRID's own width — the page root
-    // includes 16px+16px side margins, and sizing from it overshoots the
-    // content edge (last column clipped).
-    readonly property real cardSpacing: 14
+    readonly property var overviewTotals: overview && overview.totals ? overview.totals : ({})
+    readonly property real totalPackets: Number(overviewTotals.packets) || 0
+    readonly property real totalBytes: Number(overviewTotals.bytes) || 0
+    readonly property real totalIssues: Number(overviewTotals.issue_packets) || 0
+    readonly property real totalSentBytes: Number(overviewTotals.sent_bytes) || 0
+    readonly property real totalReceivedBytes: Number(overviewTotals.received_bytes) || 0
+    readonly property real tcpPackets: Number(overview && overview.tcp_packet_count) || 0
+    readonly property real appCount: Number(overview && overview.app_count) || 0
+    readonly property real domainCount: Number(overview && overview.domain_count) || 0
+    readonly property var timelinePoints: overview && overview.timeline ? overview.timeline : []
+    readonly property real timelineInterval: Number(overview && overview.timeline_interval_ms) || 1000
+    readonly property bool throughputSplit: totalSentBytes > 0 || totalReceivedBytes > 0
+
+    readonly property bool hasData: totalPackets > 0
+
+    // Grid geometry. Cards are fixed-height like upstream (340px); the width
+    // resolves against the grid content, not the page, so three columns fit
+    // inside the 24px page margins without clipping the last card.
+    readonly property real cardSpacing: 16
     readonly property real cardMinWidth: 300
-    readonly property real cardHeight: 300
-    // Explicit chunking (rows of at most cardColumns kinds): plain Row/Column
-    // lay out by explicit sizes; a plain Grid sizes columns by implicit widths
-    // and clipped the last column whenever real content was wider.
+    readonly property real cardHeight: 340
+    readonly property real pageMargin: 24
+    readonly property int cardColumns: Math.max(1, Math.min(3,
+        Math.floor((width - 2 * pageMargin + cardSpacing)
+                   / (cardMinWidth + cardSpacing))))
+    readonly property real cardWidth: (width - 2 * pageMargin
+        - (cardColumns - 1) * cardSpacing) / cardColumns
+
+    // Visible cards plus the Add Chart cell at the end (upstream
+    // CaptureOverviewCardGrid always appends the cell).
     readonly property var cardRows: {
+        var cells = visibleCards.slice()
+        cells.push("__add__")
         var rows = []
-        var step = cardGrid.columns
-        for (var i = 0; i < visibleCards.length; i += step)
-            rows.push(visibleCards.slice(i, i + step))
+        var step = Math.max(1, cardColumns)
+        for (var i = 0; i < cells.length; i += step)
+            rows.push(cells.slice(i, i + step))
         return rows
     }
 
-    function addCard(kind) {
-        var next = visibleCards.slice()
-        if (next.indexOf(kind) < 0) {
-            next.push(kind)
-            cards = next
+    readonly property real peakPacketsPerSecond: {
+        var maximum = 0
+        var list = timelinePoints ? timelinePoints : []
+        for (var i = 0; i < list.length; i++) {
+            var totals = list[i] && list[i].totals ? list[i].totals : {}
+            maximum = Math.max(maximum, Number(totals.packets) || 0)
         }
+        return maximum * 1000 / Math.max(1, timelineInterval)
     }
 
-    function removeCard(kind) {
-        var next = visibleCards.slice()
-        var index = next.indexOf(kind)
-        if (index >= 0) {
-            next.splice(index, 1)
-            cards = next
+    readonly property real peakBytesPerSecond: {
+        var maximum = 0
+        var list = timelinePoints ? timelinePoints : []
+        for (var i = 0; i < list.length; i++) {
+            var totals = list[i] && list[i].totals ? list[i].totals : {}
+            var sent = Number(totals.sent_bytes) || 0
+            var received = Number(totals.received_bytes) || 0
+            if (throughputSplit)
+                maximum = Math.max(maximum, sent, received)
+            else
+                maximum = Math.max(maximum, Number(totals.bytes) || 0)
         }
+        return maximum * 1000 / Math.max(1, timelineInterval)
+    }
+
+    readonly property string bucketLabel: {
+        var seconds = timelineInterval / 1000
+        return (seconds === Math.round(seconds) ? String(seconds)
+                                                : seconds.toFixed(1)) + "s"
     }
 
     // Header subtitle: the file's basename in chrome; full paths and live
@@ -109,13 +141,377 @@ Rectangle {
         return status.kind === "offline" ? name : "Live on " + name
     }
 
+    readonly property string hiddenHint: {
+        var hidden = hiddenCards
+        if (hidden.length === 0)
+            return "Every chart is on the Overview"
+        var names = []
+        for (var i = 0; i < hidden.length && i < 3; i++)
+            names.push(cardTitle(hidden[i]))
+        return names.join(", ") + (hidden.length > 3 ? "…" : "")
+    }
+
+    // ---------------------------------------------------------------------
+    // Card metadata and data
+    // ---------------------------------------------------------------------
+
+    function cardTitle(kind) {
+        switch (String(kind)) {
+        case "packets": return "Packets"
+        case "throughput": return "Throughput"
+        case "protocols": return "Protocols"
+        case "topApps": return "Top Apps"
+        case "topDestinations": return "Top Domains & IPs"
+        case "tcpAnalysis": return "TCP Analysis"
+        case "conversations": return "Top Conversations"
+        case "services": return "Services & Ports"
+        case "packetLengths": return "Packet Lengths"
+        }
+        return String(kind)
+    }
+
+    function cardSubtitle(kind) {
+        switch (String(kind)) {
+        case "packets":
+            return bucketLabel + " buckets · peak "
+                   + Format.count(peakPacketsPerSecond) + " packets/s"
+        case "throughput":
+            return "Peak " + Format.rate(peakBytesPerSecond)
+                   + (throughputSplit ? " · sent vs received" : " · total bytes")
+        case "protocols":
+            return "Share of captured bytes"
+        case "topApps":
+            return "By data transferred · top 6"
+        case "topDestinations":
+            return "By data transferred · top 6"
+        case "tcpAnalysis":
+            return tcpSubtitle()
+        case "conversations":
+            return "Busiest connections by data"
+        case "services":
+            return "By service port · top 6"
+        case "packetLengths":
+            return "Average " + Format.bytes(totalPackets > 0
+                                             ? totalBytes / totalPackets : 0)
+                   + " per packet"
+        }
+        return ""
+    }
+
+    function cardGlyph(kind) {
+        switch (String(kind)) {
+        case "packets": return "▥"
+        case "throughput": return "◔"
+        case "protocols": return "◕"
+        case "topApps": return "▦"
+        case "topDestinations": return "◍"
+        case "tcpAnalysis": return "⚠"
+        case "conversations": return "⇄"
+        case "services": return "#"
+        case "packetLengths": return "↔"
+        }
+        return "•"
+    }
+
+    function cardTint(kind) {
+        switch (String(kind)) {
+        case "packets": return Theme.systemBlue
+        case "throughput": return Theme.systemIndigo
+        case "protocols": return Theme.systemPurple
+        case "topApps": return Theme.systemOrange
+        case "topDestinations": return Theme.systemCyan
+        case "tcpAnalysis": return Theme.systemRed
+        case "conversations": return Theme.systemTeal
+        case "services": return Theme.systemMint
+        case "packetLengths": return Theme.systemPink
+        }
+        return Theme.accent
+    }
+
+    function issueColor(kind) {
+        switch (String(kind)) {
+        case "malformed": return Theme.systemBrown
+        case "lost_segment": return Theme.systemRed
+        case "retransmission": return Theme.systemOrange
+        case "out_of_order": return Theme.systemPurple
+        case "zero_window": return Theme.systemPink
+        case "duplicate_ack": return Theme.systemYellow
+        case "reset": return Theme.systemIndigo
+        }
+        return Theme.systemRed
+    }
+
+    function tcpSubtitle() {
+        return totalIssues > 0
+            ? Format.count(totalIssues) + " of " + Format.count(tcpPackets)
+              + " TCP packets flagged"
+            : Format.count(tcpPackets) + " TCP packets analyzed"
+    }
+
+    function tcpEmptyTitle() {
+        return tcpPackets > 0 ? "No TCP problems detected" : "No TCP traffic"
+    }
+
+    function tcpEmptyDetail() {
+        return tcpPackets > 0
+            ? "No retransmissions, lost segments, zero windows or resets."
+            : "TCP problems appear here as packets are analyzed."
+    }
+
+    function directionText(totals) {
+        var sent = Number(totals.sent_bytes) || 0
+        var received = Number(totals.received_bytes) || 0
+        if (sent + received > 0)
+            return "↑ " + Format.bytes(sent) + " · ↓ " + Format.bytes(received)
+        return "Original packet bytes"
+    }
+
+    function conversationFilter(entry) {
+        var key = String(entry.key || "")
+        if (key.indexOf("tcp.stream:") === 0)
+            return "tcp.stream == " + key.substring("tcp.stream:".length)
+        if (key.indexOf("udp.stream:") === 0)
+            return "udp.stream == " + key.substring("udp.stream:".length)
+        var transport = key.indexOf("udp") === 0 ? "udp" : "tcp"
+        var address = entry.server_address ? String(entry.server_address) : ""
+        var port = Number(entry.server_port) || 0
+        if (address.length > 0)
+            return "ip.addr == " + address + " && " + transport + ".port == " + port
+        return ""
+    }
+
+    function trafficRows(kind) {
+        var data = overview ? overview : ({})
+        var source = []
+        switch (String(kind)) {
+        case "topApps": source = data.top_apps ? data.top_apps : []; break
+        case "topDestinations": source = data.top_destinations ? data.top_destinations : []; break
+        case "services": source = data.top_services ? data.top_services : []; break
+        case "conversations": source = data.top_conversations ? data.top_conversations : []; break
+        }
+
+        var rows = []
+        for (var i = 0; i < source.length && rows.length < 6; i++) {
+            var entry = source[i] ? source[i] : {}
+            var totals = entry.totals ? entry.totals : {}
+            var bytes = Number(totals.bytes) || 0
+            var packets = Number(totals.packets) || 0
+            var issues = Number(totals.issue_packets) || 0
+            var sent = Number(totals.sent_bytes) || 0
+            var received = Number(totals.received_bytes) || 0
+            var unknown = Number(totals.unclassified_bytes) || 0
+            var usesSplit = sent + received > 0
+            var row = {
+                bytes: bytes,
+                packets: packets,
+                issueCount: issues,
+                sentFraction: 0,
+                receivedFraction: 0,
+                unknownFraction: 0,
+                usesSplit: usesSplit,
+                clickable: false,
+                actionKind: "none",
+                actionValue: "",
+                badgeText: "",
+                glyph: "•",
+                tint: Theme.accent,
+                valueText: Format.bytes(bytes),
+                detailText: "",
+                help: ""
+            }
+
+            if (kind === "topApps") {
+                row.title = String(entry.title || "")
+                row.glyph = "▦"
+                row.tint = Theme.systemOrange
+                row.clickable = row.title.length > 0 && entry.key !== undefined
+                                && entry.key !== null && String(entry.key).length > 0
+                row.actionKind = "tree"
+                row.actionValue = "app:" + String(entry.key || "")
+                row.detailText = (packets === 1 ? "1 packet" : Format.count(packets) + " packets")
+                                 + " · " + Format.percent(bytes, totalBytes)
+                row.help = "Show packets of " + row.title + "\n" + directionText(totals)
+            } else if (kind === "topDestinations") {
+                row.title = String(entry.title || "")
+                row.glyph = entry.kind === "domain" ? "◍" : "◇"
+                row.tint = entry.kind === "domain" ? Theme.systemCyan : Theme.systemBlue
+                row.clickable = row.title.length > 0 && entry.kind !== undefined
+                                && entry.kind !== null && String(entry.key || "").length > 0
+                row.actionKind = "tree"
+                row.actionValue = String(entry.kind || "ip") + ":" + String(entry.key || "")
+                row.detailText = (packets === 1 ? "1 packet" : Format.count(packets) + " packets")
+                                 + " · " + Format.percent(bytes, totalBytes)
+                row.help = "Show packets of " + row.title + "\n" + directionText(totals)
+            } else if (kind === "services") {
+                var transport = String(entry.transport || "").toUpperCase()
+                var port = Number(entry.port) || 0
+                var serviceName = entry.service_name ? String(entry.service_name) : ""
+                row.title = serviceName.length > 0 ? serviceName : transport + " " + port
+                row.badgeText = String(port)
+                row.glyph = ""
+                row.tint = Theme.systemMint
+                row.clickable = transport.length > 0 && port > 0
+                row.actionKind = "filter"
+                row.actionValue = transport.toLowerCase() + ".port == " + port
+                row.detailText = transport + " · " + Format.percent(bytes, totalBytes)
+                row.help = transport + " port " + port
+                            + (serviceName.length > 0 ? " (" + serviceName + ")" : "")
+                            + "\n" + directionText(totals)
+                            + (row.actionValue.length > 0 ? "\nFilter: " + row.actionValue : "")
+            } else if (kind === "conversations") {
+                var server = (entry.domain_name ? String(entry.domain_name)
+                                                : String(entry.server_address || ""))
+                             + ":" + String(entry.server_port || "")
+                var conversationTransport = String(entry.key || "").indexOf("udp") === 0
+                    ? "UDP" : "TCP"
+                var filter = conversationFilter(entry)
+                row.title = server
+                row.glyph = "⇄"
+                row.tint = Theme.systemTeal
+                row.clickable = filter.length > 0
+                row.actionKind = filter.length > 0 ? "filter" : "none"
+                row.actionValue = filter
+                row.detailText = conversationTransport + " · " + Format.percent(bytes, totalBytes)
+                row.help = String(entry.client_address || "") + ":" + String(entry.client_port || "")
+                            + " ⇄ " + String(entry.server_address || "") + ":"
+                            + String(entry.server_port || "")
+                            + (entry.app_name ? "\n" + String(entry.app_name) : "")
+                            + "\n" + directionText(totals)
+                            + (filter.length > 0 ? "\nFilter: " + filter : "")
+            }
+
+            rows.push(row)
+        }
+
+        var maximum = 0
+        for (var j = 0; j < rows.length; j++)
+            maximum = Math.max(maximum, rows[j].bytes)
+        maximum = Math.max(1, maximum)
+        // Re-read the raw direction fields while applying the common scale.
+        for (var r = 0; r < rows.length && r < source.length; r++) {
+            var rawTotals = source[r] && source[r].totals ? source[r].totals : {}
+            var rawSent = Number(rawTotals.sent_bytes) || 0
+            var rawReceived = Number(rawTotals.received_bytes) || 0
+            var rawUnknown = Number(rawTotals.unclassified_bytes) || 0
+            var split = rawSent + rawReceived > 0
+            rows[r].sentFraction = rawSent / maximum
+            rows[r].receivedFraction = rawReceived / maximum
+            rows[r].unknownFraction = (split ? rawUnknown : rows[r].bytes) / maximum
+        }
+        return rows
+    }
+
+    function protocolRows() {
+        var data = overview ? overview : ({})
+        var source = data.protocols ? data.protocols : []
+        var rows = []
+        for (var i = 0; i < source.length; i++) {
+            var entry = source[i] ? source[i] : {}
+            var totals = entry.totals ? entry.totals : {}
+            var bytes = Number(totals.bytes) || 0
+            rows.push({
+                title: String(entry.title || "Other"),
+                bytes: bytes,
+                fraction: totalBytes > 0 ? bytes / totalBytes : 0,
+                percentText: Format.percent(bytes, totalBytes),
+                bytesText: Format.bytes(bytes),
+                color: Theme.chartColor(i)
+            })
+        }
+        return rows
+    }
+
+    function tcpRows() {
+        var data = overview ? overview : ({})
+        var source = data.tcp_issues ? data.tcp_issues : []
+        var rows = []
+        for (var i = 0; i < source.length; i++) {
+            var entry = source[i] ? source[i] : {}
+            var kind = String(entry.kind || "")
+            var count = Number(entry.packets) || 0
+            var base = kind === "malformed" ? totalPackets : tcpPackets
+            rows.push({
+                kind: kind,
+                title: Format.issueLabel(kind),
+                count: count,
+                countText: Format.count(count),
+                percentText: Format.percent(count, base),
+                color: issueColor(kind),
+                filter: String(entry.filter || ""),
+                help: Format.issueLabel(kind) + "\nFilter: " + String(entry.filter || "")
+            })
+        }
+        return rows
+    }
+
+    function contentFor(kind) {
+        switch (String(kind)) {
+        case "packets": return packetsContent
+        case "throughput": return throughputContent
+        case "protocols": return protocolsContent
+        case "topApps": return topAppsContent
+        case "topDestinations": return topDestinationsContent
+        case "tcpAnalysis": return tcpAnalysisContent
+        case "conversations": return conversationsContent
+        case "services": return servicesContent
+        case "packetLengths": return packetLengthsContent
+        }
+        return null
+    }
+
+    function addCard(kind) {
+        if (!session || visibleCards.indexOf(kind) >= 0)
+            return
+        cards = visibleCards.concat([kind])
+    }
+
+    function removeCard(kind) {
+        var next = []
+        for (var i = 0; i < visibleCards.length; i++) {
+            if (visibleCards[i] !== kind)
+                next.push(visibleCards[i])
+        }
+        cards = next
+    }
+
+    function restoreDefaults() {
+        cards = defaultCards.slice()
+    }
+
+    function activateRow(row) {
+        if (!row || !session)
+            return
+        if (row.actionKind === "tree" && row.actionValue.length > 0)
+            session.selectTreeFilter(row.actionValue)
+        else if (row.actionKind === "filter" && row.actionValue.length > 0)
+            session.applyFilter(row.actionValue)
+        else
+            return
+        overviewPage.requestMode("packets")
+    }
+
+    function applyDisplayFilter(expression) {
+        if (!session || !expression)
+            return
+        session.applyFilter(expression)
+        overviewPage.requestMode("packets")
+    }
+
+    // Opens a Menu just below the anchor. The page is passed as the popup
+    // parent so the x/y coordinates (and the mapToItem call above) are both
+    // resolved against the same item. Qt 6.11 has no popup(x, y) overload.
+    function popupBelow(anchor, menu) {
+        var position = anchor.mapToItem(overviewPage, 0, 0)
+        menu.popup(overviewPage, position.x, position.y + anchor.height + 4)
+    }
+
     // Upstream Share actions: Copy as Markdown / Save as Markdown. Computed
     // at call time so the export always mirrors the dashboard's current data.
     property bool shareCopied: false
     property string pendingMarkdown: ""
 
     function markdownForOverview() {
-        return Format.summaryMarkdown(overview, sourceLabel)
+        return Format.summaryMarkdown(overview, sourceLabel, visibleCards)
     }
 
     function copyOverviewMarkdown() {
@@ -150,21 +546,6 @@ Rectangle {
             mdDumped = true
             session.writeTextFile(path, markdownForOverview())
         }
-    }
-
-    function cardTitle(kind) {
-        switch (String(kind)) {
-        case "packets": return "Packets"
-        case "throughput": return "Throughput"
-        case "protocols": return "Protocols"
-        case "topApps": return "Top Apps"
-        case "topDestinations": return "Top Domains & IPs"
-        case "tcpAnalysis": return "TCP Analysis"
-        case "conversations": return "Top Conversations"
-        case "services": return "Services & Ports"
-        case "packetLengths": return "Packet Lengths"
-        }
-        return String(kind)
     }
 
     Component.onCompleted: session.requestOverview()
@@ -218,22 +599,23 @@ Rectangle {
 
         anchors.fill: parent
         contentWidth: width
-        contentHeight: column.height + 24
+        contentHeight: column.height + overviewPage.pageMargin * 2
         clip: true
         ScrollBar.vertical: ScrollBar {}
 
         Column {
             id: column
 
-            x: 16
-            y: 14
-            width: overviewPage.width - 32
-            spacing: 14
+            x: overviewPage.pageMargin
+            y: overviewPage.pageMargin
+            width: overviewPage.width - overviewPage.pageMargin * 2
+            spacing: 16
 
-            // Header: page title + the source this snapshot describes.
+            // Header: page title, source, and the three upstream dashboard
+            // actions (Endpoints, View Packets, Share).
             RowLayout {
                 width: parent.width
-                spacing: 10
+                spacing: 8
 
                 Text {
                     text: "Overview"
@@ -250,17 +632,20 @@ Rectangle {
                     color: Theme.secondaryLabel
                     text: overviewPage.sourceLabel
                 }
-
-                // Upstream CaptureOverviewDashboardView header actions: the
-                // dashboard hands control back to the packet table.
+                ToolButton {
+                    text: "Endpoints…"
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.uiSmall
+                    implicitHeight: 28
+                    onClicked: overviewPage.requestEndpoints()
+                }
                 ToolButton {
                     text: "View Packets"
                     font.family: Theme.uiFont
                     font.pixelSize: Theme.uiSmall
+                    implicitHeight: 28
                     onClicked: overviewPage.requestMode("packets")
                 }
-
-                // Upstream Share menu: export the dashboard as Markdown.
                 ToolButton {
                     id: shareButton
 
@@ -268,7 +653,8 @@ Rectangle {
                     text: overviewPage.shareCopied ? "Copied ✓" : "Share ▾"
                     font.family: Theme.uiFont
                     font.pixelSize: Theme.uiSmall
-                    onClicked: shareMenu.popup(shareButton.x, shareButton.y + shareButton.height + 4)
+                    implicitHeight: 28
+                    onClicked: overviewPage.popupBelow(shareButton, shareMenu)
                 }
             }
 
@@ -278,16 +664,15 @@ Rectangle {
                 visible: overviewPage.hasData
             }
 
-            // Card grid ------------------------------------------------------
+            // Card grid: visible cards + the Add Chart cell, chunked into
+            // explicit rows so cross-row gaps stay equal and the last card is
+            // never clipped by a Grid's implicit sizing.
             Column {
                 id: cardGrid
+
                 width: parent.width
                 spacing: overviewPage.cardSpacing
                 visible: overviewPage.hasData
-
-                readonly property int columns: Math.max(1, Math.min(3,
-                    Math.floor((width + overviewPage.cardSpacing) / (overviewPage.cardMinWidth + overviewPage.cardSpacing))))
-                readonly property real cardWidth: (width - (columns - 1) * overviewPage.cardSpacing) / columns
 
                 Repeater {
                     model: overviewPage.cardRows
@@ -300,39 +685,34 @@ Rectangle {
                         Repeater {
                             model: parent.modelData
 
-                            // OverviewCard's own required modelData is filled
-                            // by Repeater injection here — do not shadow it.
-                            delegate: OverviewCard {
-                                title: overviewPage.cardTitle(modelData)
-                                width: cardGrid.cardWidth
+                            delegate: Item {
+                                required property var modelData
+
+                                width: overviewPage.cardWidth
                                 height: overviewPage.cardHeight
-                                onRemoveRequested: overviewPage.removeCard(modelData)
+
+                                OverviewCard {
+                                    anchors.fill: parent
+                                    visible: modelData !== "__add__"
+                                    title: overviewPage.cardTitle(modelData)
+                                    subtitle: overviewPage.cardSubtitle(modelData)
+                                    glyph: overviewPage.cardGlyph(modelData)
+                                    tint: overviewPage.cardTint(modelData)
+                                    onRemoveRequested: overviewPage.removeCard(modelData)
+
+                                    Loader {
+                                        anchors.fill: parent
+                                        sourceComponent: overviewPage.contentFor(modelData)
+                                    }
+                                }
+
+                                AddCardCell {
+                                    anchors.fill: parent
+                                    visible: modelData === "__add__"
+                                }
                             }
                         }
                     }
-                }
-            }
-
-            // "+" picker row: hidden cards return here (upstream picker).
-            Row {
-                spacing: 10
-                visible: overviewPage.hasData && overviewPage.hiddenCards.length > 0
-
-                Button {
-                    id: addCardButton
-                    flat: true
-                    implicitWidth: 34
-                    implicitHeight: 28
-                    text: "+"
-
-                    onClicked: addCardMenu.popup(addCardButton.x + 8, addCardButton.y + addCardButton.height + 4)
-                }
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Add a card"
-                    font.family: Theme.uiFont
-                    font.pixelSize: Theme.uiSmall
-                    color: Theme.secondaryLabel
                 }
             }
 
@@ -340,14 +720,38 @@ Rectangle {
                 id: addCardMenu
 
                 Repeater {
-                    model: overviewPage.hiddenCards
+                    model: overviewPage.allCards
 
                     delegate: MenuItem {
                         required property var modelData
 
-                        text: overviewPage.cardTitle(modelData)
-                        onTriggered: overviewPage.addCard(modelData)
+                        text: (overviewPage.visibleCards.indexOf(modelData) >= 0
+                               ? "✓  " : "     ") + overviewPage.cardTitle(modelData)
+                        onTriggered: {
+                            if (overviewPage.visibleCards.indexOf(modelData) >= 0)
+                                overviewPage.removeCard(modelData)
+                            else
+                                overviewPage.addCard(modelData)
+                        }
                     }
+                }
+
+                MenuSeparator { }
+
+                MenuItem {
+                    text: "Restore Defaults"
+                    enabled: {
+                        var current = overviewPage.visibleCards
+                        var defaults = overviewPage.defaultCards
+                        if (current.length !== defaults.length)
+                            return true
+                        for (var i = 0; i < defaults.length; i++) {
+                            if (current[i] !== defaults[i])
+                                return true
+                        }
+                        return false
+                    }
+                    onTriggered: overviewPage.restoreDefaults()
                 }
             }
 
@@ -375,11 +779,8 @@ Rectangle {
     }
 
     // ---------------------------------------------------------------------
-    // Inline components (self-contained: they only read overviewPage ids and
-    // their own properties).
+    // Summary tiles (the five upstream metricPresentations)
     // ---------------------------------------------------------------------
-
-    // The five summary tiles, computed like upstream metricPresentations().
     component OverviewMetrics: Flow {
         id: metrics
 
@@ -389,10 +790,11 @@ Rectangle {
 
         Repeater {
             model: {
-                var totals = metrics.overview.totals ? metrics.overview.totals : {}
+                var totals = metrics.overview && metrics.overview.totals
+                    ? metrics.overview.totals : {}
                 var packets = Number(totals.packets) || 0
-                var firstMs = Number(metrics.overview.first_packet_ms) || 0
-                var lastMs = Number(metrics.overview.last_packet_ms) || 0
+                var firstMs = Number(metrics.overview && metrics.overview.first_packet_ms) || 0
+                var lastMs = Number(metrics.overview && metrics.overview.last_packet_ms) || 0
                 var duration = Math.max(0, lastMs - firstMs)
                 var spanSeconds = Math.max(0, duration / 1000)
                 var pps = spanSeconds >= 1 ? packets / spanSeconds : 0
@@ -403,15 +805,15 @@ Rectangle {
                 var sent = Number(totals.sent_bytes) || 0
                 var received = Number(totals.received_bytes) || 0
                 var trafficDetail = (sent > 0 || received > 0)
-                    ? "\u2191 " + Format.bytes(sent) + "   \u2193 " + Format.bytes(received)
+                    ? "↑ " + Format.bytes(sent) + "   ↓ " + Format.bytes(received)
                     : "Original packet bytes"
-                var tcp = Number(metrics.overview.tcp_packet_count) || 0
+                var tcp = Number(metrics.overview && metrics.overview.tcp_packet_count) || 0
                 var issues = Number(totals.issue_packets) || 0
                 var issueDetail = issues > 0
                     ? Format.percent(issues, tcp) + " of TCP packets"
                     : "No flagged packets"
-                var apps = Number(metrics.overview.app_count) || 0
-                var domains = Number(metrics.overview.domain_count) || 0
+                var apps = Number(metrics.overview && metrics.overview.app_count) || 0
+                var domains = Number(metrics.overview && metrics.overview.domain_count) || 0
                 return [
                     { title: "Packets", value: Format.count(packets), detail: ppsDetail,
                       color: Theme.label },
@@ -431,9 +833,9 @@ Rectangle {
             delegate: Rectangle {
                 required property var modelData
 
-                width: Math.max(170, (metrics.width - 4 * metrics.spacing) / 5)
-                height: 86
-                radius: 10
+                width: Math.max(150, (metrics.width - 4 * metrics.spacing) / 5)
+                height: 84
+                radius: 12
                 color: Theme.contentBackground
                 border.color: Theme.separator
 
@@ -468,623 +870,414 @@ Rectangle {
         }
     }
 
-    // Generic card chrome: title header with a remove button and content slot.
-    component OverviewCard: Rectangle {
-        id: card
+    // ---------------------------------------------------------------------
+    // Grid Add Chart cell
+    // ---------------------------------------------------------------------
+    component AddCardCell: Item {
+        id: addCell
 
-        required property var modelData
-        property string kind: modelData ? String(modelData) : ""
-        property string title
-        signal removeRequested()
+        activeFocusOnTab: true
 
-        radius: 10
-        color: Theme.contentBackground
-        border.color: Theme.separator
+        HoverHandler {
+            id: addHover
+        }
 
-        Item {
-            id: header
+        Canvas {
+            id: dashedBorder
 
-            x: 14
-            y: 8
-            width: parent.width - 28
-            height: 24
+            anchors.fill: parent
+
+            function roundedRect(ctx, x, y, w, h, radius) {
+                ctx.beginPath()
+                ctx.moveTo(x + radius, y)
+                ctx.lineTo(x + w - radius, y)
+                ctx.quadraticCurveTo(x + w, y, x + w, y + radius)
+                ctx.lineTo(x + w, y + h - radius)
+                ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h)
+                ctx.lineTo(x + radius, y + h)
+                ctx.quadraticCurveTo(x, y + h, x, y + h - radius)
+                ctx.lineTo(x, y + radius)
+                ctx.quadraticCurveTo(x, y, x + radius, y)
+                ctx.closePath()
+            }
+
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.clearRect(0, 0, width, height)
+                ctx.lineWidth = 1.5
+                ctx.setLineDash([6, 5])
+                ctx.strokeStyle = addHover.hovered
+                    ? Qt.rgba(Theme.systemOrange.r, Theme.systemOrange.g,
+                              Theme.systemOrange.b, 0.65)
+                    : Theme.separator
+                roundedRect(ctx, 1, 1, width - 2, height - 2, 18)
+                ctx.stroke()
+                ctx.setLineDash([])
+            }
+
+            onWidthChanged: requestPaint()
+            onHeightChanged: requestPaint()
+        }
+
+        Column {
+            anchors.centerIn: parent
+            spacing: 10
+
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: 44
+                height: 44
+                radius: 22
+                color: Qt.rgba(Theme.systemOrange.r, Theme.systemOrange.g,
+                               Theme.systemOrange.b, addHover.hovered ? 0.20 : 0.12)
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "+"
+                    font.family: Theme.uiFont
+                    font.pixelSize: 22
+                    font.weight: Font.DemiBold
+                    color: Theme.systemOrange
+                }
+            }
 
             Text {
-                width: parent.width - removeButton.width
-                elide: Text.ElideRight
-                anchors.verticalCenter: parent.verticalCenter
-                text: card.title
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "Add Chart"
                 font.family: Theme.uiFont
-                font.pixelSize: Theme.uiSize
+                font.pixelSize: 13
                 font.weight: Font.DemiBold
                 color: Theme.label
             }
-            ToolButton {
-                id: removeButton
-                width: 20
-                height: 20
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                flat: true
-                hoverEnabled: true
-                text: "\u00D7"
-                ToolTip.visible: removeButton.hovered
-                ToolTip.text: "Remove from Overview"
-                ToolTip.delay: 400
-
-                onClicked: card.removeRequested()
-            }
-        }
-
-        // Content: one of the chart canvases or the row lists.
-        Loader {
-            id: content
-
-            x: 14
-            y: 34
-            width: card.width - 28
-            height: card.height - 48
-
-            sourceComponent: {
-                switch (card.kind) {
-                case "packets": return packetsChart
-                case "throughput": return rateChart
-                case "packetLengths": return lengthsChart
-                case "protocols":
-                case "topApps":
-                case "topDestinations":
-                case "services": return shareRowsComponent
-                case "conversations": return conversationsComponent
-                case "tcpAnalysis": return issuesComponent
-                }
-                return emptyComponent
-            }
-
-            Component {
-                id: emptyComponent
-
-                Item { }
-            }
-
-            Component {
-                id: packetsChart
-
-                TimelineCanvas { anchors.fill: parent }
-            }
-            Component {
-                id: rateChart
-
-                RateCanvas { anchors.fill: parent }
-            }
-            Component {
-                id: lengthsChart
-
-                PacketLengthsCanvas { anchors.fill: parent }
-            }
-            Component {
-                id: shareRowsComponent
-
-                ShareRowsList { anchors.fill: parent; kind: card.kind }
-            }
-            Component {
-                id: conversationsComponent
-
-                ConversationRowsList { anchors.fill: parent }
-            }
-            Component {
-                id: issuesComponent
-
-                TcpAnalysisRowsList { anchors.fill: parent }
-            }
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // Charts (Canvas redraws on data or size change)
-    // ------------------------------------------------------------------
-
-    component TimelineCanvas: Canvas {
-        id: timelineCanvas
-
-        readonly property var points: {
-            var overview = overviewPage.overview
-            return overview.timeline ? overview.timeline : []
-        }
-        onPointsChanged: requestPaint()
-        onWidthChanged: requestPaint()
-        onPaint: {
-            var ctx = getContext("2d")
-            var w = width
-            var h = height
-            var labelSpace = 16
-            var baseline = h - labelSpace - 2
-            ctx.clearRect(0, 0, w, h)
-            if (points.length === 0) {
-                ctx.fillStyle = Theme.secondaryLabel
-                ctx.font = "11px sans-serif"
-                ctx.fillText("No packets", 4, 14)
-                return
-            }
-            var maxPackets = 1
-            var i
-            for (i = 0; i < points.length; i++) {
-                var totals = points[i].totals ? points[i].totals : {}
-                maxPackets = Math.max(maxPackets, Number(totals.packets) || 0)
-            }
-            var slotWidth = w / points.length
-            var barWidth = Math.max(2, slotWidth - 4)
-            var scale = baseline / maxPackets
-            for (i = 0; i < points.length; i++) {
-                var columnTotals = points[i].totals ? points[i].totals : {}
-                var packets = Number(columnTotals.packets) || 0
-                var issues = Number(columnTotals.issue_packets) || 0
-                if (packets <= 0)
-                    continue
-                var x = i * slotWidth + (slotWidth - barWidth) / 2
-                var columnHeight = Math.max(1, packets * scale)
-                ctx.fillStyle = "#5b8bd4"
-                ctx.fillRect(x, baseline - columnHeight, barWidth, columnHeight)
-                if (issues > 0) {
-                    var issueHeight = issues / packets * columnHeight
-                    ctx.fillStyle = Theme.systemRed
-                    ctx.fillRect(x, baseline - columnHeight, barWidth, Math.min(columnHeight, issueHeight))
-                }
-            }
-            ctx.strokeStyle = Theme.separator
-            ctx.lineWidth = 1
-            ctx.beginPath()
-            ctx.moveTo(0, baseline + 0.5)
-            ctx.lineTo(w, baseline + 0.5)
-            ctx.stroke()
-            // Sparse time labels: first, middle, last slot.
-            ctx.fillStyle = Theme.secondaryLabel
-            ctx.font = "10px sans-serif"
-            if (points.length === 1) {
-                ctx.fillText(Format.clockTime(points[0].date_ms), 2, baseline + 12)
-            } else {
-                ctx.fillText(Format.clockTime(points[0].date_ms), 2, baseline + 12)
-                var middle = Math.floor((points.length - 1) / 2)
-                var midText = Format.clockTime(points[middle].date_ms)
-                ctx.fillText(midText, w / 2 - ctx.measureText(midText).width / 2, baseline + 12)
-                var lastText = Format.clockTime(points[points.length - 1].date_ms)
-                ctx.fillText(lastText, w - ctx.measureText(lastText).width - 2, baseline + 12)
-            }
-            var maxLabel = Format.count(maxPackets) + (maxPackets === 1 ? " packet/slot" : " packets/slot")
-            ctx.font = "10px sans-serif"
-            ctx.fillStyle = Theme.secondaryLabel
-            ctx.fillText(maxLabel, 2, 10)
-        }
-    }
-
-    component RateCanvas: Canvas {
-        id: rateCanvas
-
-        readonly property var points: {
-            var overview = overviewPage.overview
-            return overview.timeline ? overview.timeline : []
-        }
-        readonly property real intervalMs: Number(overviewPage.overview.timeline_interval_ms) || 1000
-        // Received and sent when the capture knows the local side; otherwise
-        // one total series (upstream CaptureOverviewThroughputSeries.series).
-        readonly property bool hasDirections: {
-            for (var i = 0; i < points.length; i++) {
-                var totals = points[i].totals ? points[i].totals : {}
-                if ((Number(totals.sent_bytes) || 0) > 0 || (Number(totals.received_bytes) || 0) > 0)
-                    return true
-            }
-            return false
-        }
-        readonly property var series: hasDirections
-            ? [
-                { key: "sent_bytes", label: "Sent", color: Theme.systemGreen },
-                { key: "received_bytes", label: "Received", color: Theme.systemBlue },
-              ]
-            : [
-                { key: "bytes", label: "Total", color: Theme.systemOrange },
-              ]
-        // Peak label mirrors the upstream subtitle: the busiest slot's bytes
-        // expressed per second.
-        readonly property real peakRate: {
-            var peak = 0
-            for (var i = 0; i < points.length; i++) {
-                var totals = points[i].totals ? points[i].totals : {}
-                peak = Math.max(peak, Number(totals.bytes) || 0)
-            }
-            return peak / Math.max(1, intervalMs / 1000)
-        }
-        onPointsChanged: requestPaint()
-        onWidthChanged: requestPaint()
-        onPaint: {
-            var ctx = getContext("2d")
-            var w = width
-            var h = height
-            var labelSpace = 16
-            var baseline = h - labelSpace - 2
-            ctx.clearRect(0, 0, w, h)
-            if (points.length < 2) {
-                ctx.fillStyle = Theme.secondaryLabel
-                ctx.font = "11px sans-serif"
-                ctx.fillText("Not enough packets for a rate series", 4, 14)
-                return
-            }
-            var maxSlotBytes = 1
-            for (var m = 0; m < points.length; m++) {
-                var peakTotals = points[m].totals ? points[m].totals : {}
-                maxSlotBytes = Math.max(maxSlotBytes, Number(peakTotals.bytes) || 0)
-            }
-            var scale = baseline / maxSlotBytes
-            var slotSeconds = Math.max(1, intervalMs / 1000)
-            for (var s = 0; s < series.length; s++) {
-                ctx.strokeStyle = String(series[s].color)
-                ctx.lineWidth = 1.5
-                ctx.beginPath()
-                for (var i = 0; i < points.length; i++) {
-                    var totals = points[i].totals ? points[i].totals : {}
-                    var value = Number(totals[series[s].key]) || 0
-                    var x = i * (w / (points.length - 1))
-                    var y = baseline - (value / slotSeconds) * (scale * slotSeconds)
-                    if (i === 0) {
-                        ctx.moveTo(x, y)
-                    } else {
-                        ctx.lineTo(x, y)
-                    }
-                }
-                ctx.stroke()
-            }
-            ctx.strokeStyle = Theme.separator
-            ctx.lineWidth = 1
-            ctx.beginPath()
-            ctx.moveTo(0, baseline + 0.5)
-            ctx.lineTo(w, baseline + 0.5)
-            ctx.stroke()
-            ctx.fillStyle = Theme.secondaryLabel
-            ctx.font = "10px sans-serif"
-            ctx.fillText(Format.clockTime(points[0].date_ms), 2, baseline + 12)
-            var lastText = Format.clockTime(points[points.length - 1].date_ms)
-            ctx.fillText(lastText, w - ctx.measureText(lastText).width - 2, baseline + 12)
-            // Peak legend: title at left, series legend at right (upstream
-            // legend item labels).
-            ctx.fillStyle = Theme.label
-            ctx.font = "11px sans-serif"
-            var legendRight = [];
-            for (var l = 0; l < series.length; l++) legendRight.push(series[l].label)
-            ctx.fillText("Peak " + Format.rate(peakRate), 2, 12)
-            var label = legendRight.join("  ·  ")
-            ctx.fillStyle = Theme.secondaryLabel
-            ctx.fillText(label, w - ctx.measureText(label).width - 6, 12)
-        }
-    }
-
-    component PacketLengthsCanvas: Canvas {
-        id: lengthsCanvas
-
-        readonly property var counts: {
-            var overview = overviewPage.overview
-            return overview.packet_lengths ? overview.packet_lengths : []
-        }
-        onCountsChanged: requestPaint()
-        onWidthChanged: requestPaint()
-        onPaint: {
-            var ctx = getContext("2d")
-            var w = width
-            var h = height
-            var labelSpace = 16
-            var baseline = h - labelSpace - 2
-            ctx.clearRect(0, 0, w, h)
-            if (counts.length === 0) {
-                ctx.fillStyle = Theme.secondaryLabel
-                ctx.font = "11px sans-serif"
-                ctx.fillText("No packets", 4, 14)
-                return
-            }
-            var max = 1
-            for (var i = 0; i < counts.length; i++)
-                max = Math.max(max, Number(counts[i]) || 0)
-            var slotWidth = w / counts.length
-            for (var j = 0; j < counts.length; j++) {
-                var value = Number(counts[j]) || 0
-                var barHeight = value * (baseline / max)
-                var barWidth = Math.max(8, slotWidth - 8)
-                var x = j * slotWidth + (slotWidth - barWidth) / 2
-                ctx.fillStyle = "#5b8bd4"
-                if (barHeight > 0)
-                    ctx.fillRect(x, baseline - barHeight, barWidth, barHeight)
-                ctx.fillStyle = Theme.secondaryLabel
-                ctx.font = "10px sans-serif"
-                var label = Format.lengthBucketLabel(j)
-                ctx.fillText(label, x + barWidth / 2 - ctx.measureText(label).width / 2, baseline + 12)
-            }
-            ctx.strokeStyle = Theme.separator
-            ctx.lineWidth = 1
-            ctx.beginPath()
-            ctx.moveTo(0, baseline + 0.5)
-            ctx.lineTo(w, baseline + 0.5)
-            ctx.stroke()
-            ctx.fillStyle = Theme.secondaryLabel
-            ctx.font = "10px sans-serif"
-            ctx.fillText(Format.lengthBucketTitle(0) + " to " + Format.lengthBucketTitle(counts.length - 1), 2, 10)
-        }
-    }
-
-    // Share rows: protocols, top apps, destinations, and services with a
-    // proportional byte bar. Rows for apps/domains/IPs apply the same tree
-    // scope the sidebar would select (upstream row actions).
-    component ShareRowsList: ListView {
-        id: shareRows
-
-        required property string kind
-        readonly property var rows: {
-            var overview = overviewPage.overview
-            var input
-            switch (kind) {
-            case "protocols": input = overview.protocols; break
-            case "topApps": input = overview.top_apps; break
-            case "topDestinations": input = overview.top_destinations; break
-            case "services": {
-                var serviceRows = []
-                var services = overview.top_services ? overview.top_services : []
-                for (var i = 0; i < services.length; i++) {
-                    var service = services[i]
-                    var name = service.service_name
-                        ? service.transport.toUpperCase() + " " + service.port + " \u00B7 " + service.service_name
-                        : service.transport.toUpperCase() + " " + service.port
-                    serviceRows.push({ title: name, totals: service.totals, kind: "service", key: "" })
-                }
-                return serviceRows
-            }
-            }
-            var rows = []
-            var source = input ? input : []
-            for (var j = 0; j < source.length; j++) {
-                var entry = source[j]
-                rows.push({
-                    title: String(entry.title),
-                    totals: entry.totals ? entry.totals : {},
-                    kind: entry.kind ? String(entry.kind) : "",
-                    key: entry.key ? String(entry.key) : "",
-                })
-            }
-            return rows
-        }
-        readonly property real maxBytes: {
-            var max = 0
-            for (var i = 0; i < rows.length; i++) {
-                var totals = rows[i].totals ? rows[i].totals : {}
-                max = Math.max(max, Number(totals.bytes) || 0)
-            }
-            return max
-        }
-
-        model: rows
-        spacing: 8
-        clip: true
-        interactive: false
-
-        delegate: Item {
-            id: shareRow
-
-            required property var modelData
-
-            width: shareRows.width
-            height: 32
-
-            readonly property var rowTotals: modelData.totals ? modelData.totals : {}
-            readonly property real bytes: Number(rowTotals.bytes) || 0
-            readonly property real share: shareRows.maxBytes > 0 ? bytes / shareRows.maxBytes : 0
-            readonly property color tint: shareRows.kind === "services" || shareRows.kind === "topApps"
-                ? Theme.accent : Theme.protocolTint(modelData.title)
-            readonly property bool clickable:
-                (modelData.kind === "domain" || modelData.kind === "ip" || modelData.kind === "app")
-                && modelData.key.length > 0
-
-            function applyRowFilter() {
-                var session = overviewPage.session
-                if (modelData.kind === "app")
-                    session.selectTreeFilter("app:" + modelData.key)
-                else if (modelData.kind === "domain")
-                    session.selectTreeFilter("domain:" + modelData.key)
-                else if (modelData.kind === "ip")
-                    session.selectTreeFilter("ip:" + modelData.key)
-            }
-
-            MouseArea {
-                id: shareRowArea
-
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: shareRow.clickable ? Qt.PointingHandCursor : Qt.ArrowCursor
-                onClicked: if (shareRow.clickable) shareRow.applyRowFilter()
-            }
-            Rectangle {
-                anchors.fill: parent
-                radius: 6
-                color: Theme.rowAlternate
-                opacity: shareRowArea.containsMouse && shareRow.clickable ? 1 : 0
-            }
-
-            Column {
-                anchors.fill: parent
-                spacing: 3
-
-                RowLayout {
-                    width: parent.width
-                    spacing: 8
-
-                    Text {
-                        Layout.fillWidth: true
-                        elide: Text.ElideRight
-                        text: shareRow.modelData.title
-                        font.family: Theme.uiFont
-                        font.pixelSize: Theme.uiSize
-                        color: Theme.label
-                    }
-                    Text {
-                        text: Format.bytes(shareRow.bytes)
-                        font.family: Theme.uiFont
-                        font.pixelSize: Theme.uiSmall
-                        color: Theme.secondaryLabel
-                    }
-                }
-                Rectangle {
-                    width: parent.width
-                    height: 5
-                    radius: 2.5
-                    color: Theme.separator
-
-                    Rectangle {
-                        width: parent.width * shareRow.share
-                        height: parent.height
-                        radius: 2.5
-                        color: shareRow.tint
-                    }
-                }
-            }
-        }
-
-        Label {
-            anchors.top: parent.top
-            anchors.horizontalCenter: parent.horizontalCenter
-            visible: shareRows.rows.length === 0
-            text: {
-                switch (shareRows.kind) {
-                case "topApps": return "Apps appear once live traffic is attributed to local processes."
-                case "topDestinations": return "No destinations in this packet range."
-                case "protocols": return "No protocols in this packet range."
-                default: return "No services in this packet range."
-                }
-            }
-            font.family: Theme.uiFont
-            font.pixelSize: Theme.uiSmall
-            color: Theme.secondaryLabel
-        }
-    }
-
-    component ConversationRowsList: ListView {
-        id: conversationRows
-
-        readonly property var rows: {
-            var overview = overviewPage.overview
-            return overview.top_conversations ? overview.top_conversations : []
-        }
-
-        model: rows
-        spacing: 8
-        clip: true
-        interactive: false
-
-        delegate: Item {
-            required property var modelData
-
-            width: conversationRows.width
-            height: 26
 
             Text {
-                width: parent.width - 76
-                elide: Text.ElideRight
-                anchors.verticalCenter: parent.verticalCenter
-                text: {
-                    var label = modelData.client_address + ":" + modelData.client_port
-                        + " \u21C4 " + modelData.server_address + ":" + modelData.server_port
-                    if (modelData.domain_name)
-                        label += "  \u00B7 " + modelData.domain_name
-                    if (modelData.app_name)
-                        label += "  \u00B7 " + modelData.app_name
-                    return label
-                }
+                width: Math.min(overviewPage.cardWidth - 48, 260)
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                text: overviewPage.hiddenHint
                 font.family: Theme.uiFont
-                font.pixelSize: Theme.uiSmall
-                color: Theme.label
-            }
-            Text {
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                text: Format.bytes(Number((modelData.totals ? modelData.totals : {}).bytes) || 0)
-                font.family: Theme.uiFont
-                font.pixelSize: Theme.uiSmall
+                font.pixelSize: 11
                 color: Theme.secondaryLabel
             }
         }
 
-        Label {
-            anchors.top: parent.top
-            anchors.horizontalCenter: parent.horizontalCenter
-            visible: conversationRows.rows.length === 0
-            text: "No conversations in this packet range."
-            font.family: Theme.uiFont
-            font.pixelSize: Theme.uiSmall
-            color: Theme.secondaryLabel
+        MouseArea {
+            anchors.fill: parent
+            onClicked: {
+                addCell.forceActiveFocus()
+                overviewPage.popupBelow(addCell, addCardMenu)
+            }
+        }
+
+        Keys.onReturnPressed: overviewPage.popupBelow(addCell, addCardMenu)
+        Keys.onSpacePressed: overviewPage.popupBelow(addCell, addCardMenu)
+
+        Connections {
+            target: addHover
+            function onHoveredChanged() {
+                dashedBorder.requestPaint()
+            }
         }
     }
 
-    component TcpAnalysisRowsList: ListView {
-        id: issueRows
+    // ---------------------------------------------------------------------
+    // Card content components
+    // ---------------------------------------------------------------------
+    Component {
+        id: packetsContent
 
-        readonly property var rows: {
-            var overview = overviewPage.overview
-            return overview.tcp_issues ? overview.tcp_issues : []
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 6
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 14
+
+                Row {
+                    spacing: 5
+                    Rectangle {
+                        width: 8; height: 8; radius: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: Theme.systemBlue
+                    }
+                    Text {
+                        text: "Packets"
+                        font.family: Theme.uiFont
+                        font.pixelSize: 10
+                        color: Theme.secondaryLabel
+                    }
+                    Text {
+                        text: Format.count(overviewPage.totalPackets)
+                        font.family: Theme.monoFont
+                        font.pixelSize: 10
+                        font.weight: Font.DemiBold
+                        color: Theme.label
+                    }
+                }
+                Row {
+                    spacing: 5
+                    Rectangle {
+                        width: 8; height: 8; radius: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: Theme.systemRed
+                    }
+                    Text {
+                        text: "TCP issues"
+                        font.family: Theme.uiFont
+                        font.pixelSize: 10
+                        color: Theme.secondaryLabel
+                    }
+                    Text {
+                        text: Format.count(overviewPage.totalIssues)
+                        font.family: Theme.monoFont
+                        font.pixelSize: 10
+                        font.weight: Font.DemiBold
+                        color: Theme.label
+                    }
+                }
+                Item { Layout.fillWidth: true }
+            }
+
+            OverviewTimeChart {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                points: overviewPage.timelinePoints
+                intervalMs: overviewPage.timelineInterval
+                mode: "packets"
+            }
         }
+    }
 
-        model: rows
-        spacing: 4
-        clip: true
-        interactive: false
+    Component {
+        id: throughputContent
 
-        delegate: ItemDelegate {
-            id: issueRow
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 6
 
-            required property var modelData
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 14
 
-            width: issueRows.width
-            height: 32
+                Row {
+                    spacing: 5
+                    visible: overviewPage.throughputSplit
+                    Rectangle {
+                        width: 8; height: 8; radius: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: Theme.systemCyan
+                    }
+                    Text {
+                        text: "Received"
+                        font.family: Theme.uiFont
+                        font.pixelSize: 10
+                        color: Theme.secondaryLabel
+                    }
+                    Text {
+                        text: Format.bytes(overviewPage.totalReceivedBytes)
+                        font.family: Theme.monoFont
+                        font.pixelSize: 10
+                        font.weight: Font.DemiBold
+                        color: Theme.label
+                    }
+                }
+                Row {
+                    spacing: 5
+                    visible: overviewPage.throughputSplit
+                    Rectangle {
+                        width: 8; height: 8; radius: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: Theme.systemPurple
+                    }
+                    Text {
+                        text: "Sent"
+                        font.family: Theme.uiFont
+                        font.pixelSize: 10
+                        color: Theme.secondaryLabel
+                    }
+                    Text {
+                        text: Format.bytes(overviewPage.totalSentBytes)
+                        font.family: Theme.monoFont
+                        font.pixelSize: 10
+                        font.weight: Font.DemiBold
+                        color: Theme.label
+                    }
+                }
+                Row {
+                    spacing: 5
+                    visible: !overviewPage.throughputSplit
+                    Rectangle {
+                        width: 8; height: 8; radius: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: Theme.systemBlue
+                    }
+                    Text {
+                        text: "Total"
+                        font.family: Theme.uiFont
+                        font.pixelSize: 10
+                        color: Theme.secondaryLabel
+                    }
+                    Text {
+                        text: Format.bytes(overviewPage.totalBytes)
+                        font.family: Theme.monoFont
+                        font.pixelSize: 10
+                        font.weight: Font.DemiBold
+                        color: Theme.label
+                    }
+                }
+                Item { Layout.fillWidth: true }
+            }
 
-            contentItem: RowLayout {
-                spacing: 10
+            OverviewTimeChart {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                points: overviewPage.timelinePoints
+                intervalMs: overviewPage.timelineInterval
+                mode: "throughput"
+            }
+        }
+    }
+
+    Component {
+        id: protocolsContent
+
+        RowLayout {
+            anchors.fill: parent
+            spacing: 12
+
+            OverviewDonut {
+                Layout.preferredWidth: 118
+                Layout.preferredHeight: 118
+                Layout.alignment: Qt.AlignVCenter
+                rows: overviewPage.protocolRows()
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: 0
+
+                Repeater {
+                    model: overviewPage.protocolRows()
+
+                    delegate: RowLayout {
+                        required property var modelData
+
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 19
+                        spacing: 6
+
+                        Rectangle {
+                            width: 7; height: 7; radius: 3.5
+                            Layout.alignment: Qt.AlignVCenter
+                            color: modelData.color
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            elide: Text.ElideRight
+                            text: modelData.title
+                            font.family: Theme.uiFont
+                            font.pixelSize: 11
+                            color: Theme.label
+                        }
+                        Text {
+                            text: modelData.bytesText
+                            font.family: Theme.monoFont
+                            font.pixelSize: 9
+                            color: Theme.secondaryLabel
+                        }
+                        Text {
+                            Layout.preferredWidth: 31
+                            horizontalAlignment: Text.AlignRight
+                            text: modelData.percentText
+                            font.family: Theme.monoFont
+                            font.pixelSize: 10
+                            color: Theme.secondaryLabel
+                        }
+                    }
+                }
 
                 Text {
                     Layout.fillWidth: true
-                    elide: Text.ElideRight
-                    text: Format.issueLabel(issueRow.modelData.kind)
+                    visible: overviewPage.protocolRows().length === 0
+                    horizontalAlignment: Text.AlignHCenter
+                    text: "No protocols in this packet range."
                     font.family: Theme.uiFont
-                    font.pixelSize: Theme.uiSize
-                    color: Theme.label
+                    font.pixelSize: 11
+                    color: Theme.secondaryLabel
                 }
-                Rectangle {
-                    implicitWidth: 52
-                    implicitHeight: 20
-                    radius: 10
-                    color: Theme.systemRed
-                    Layout.alignment: Qt.AlignVCenter
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: Format.count(issueRow.modelData.packets)
-                        font.family: Theme.uiFont
-                        font.pixelSize: Theme.uiSmall
-                        font.weight: Font.DemiBold
-                        color: "#ffffff"
-                    }
-                }
-            }
-
-            background: Rectangle {
-                radius: 6
-                color: issueRow.hovered ? Theme.rowAlternate : "transparent"
-            }
-
-            onClicked: {
-                // Paste this issue's fixed Wireshark display filter.
-                overviewPage.session.applyFilter(String(issueRow.modelData.filter))
             }
         }
+    }
 
-        Label {
-            anchors.top: parent.top
-            anchors.horizontalCenter: parent.horizontalCenter
-            visible: issueRows.rows.length === 0
-            text: "No flagged packets \u2014 healthy capture."
-            font.family: Theme.uiFont
-            font.pixelSize: Theme.uiSmall
-            color: Theme.secondaryLabel
+    Component {
+        id: topAppsContent
+
+        OverviewTrafficRows {
+            anchors.fill: parent
+            rows: overviewPage.trafficRows("topApps")
+            emptyText: "Apps appear once live traffic is attributed to local processes."
+            onRowActivated: (row) => overviewPage.activateRow(row)
+        }
+    }
+
+    Component {
+        id: topDestinationsContent
+
+        OverviewTrafficRows {
+            anchors.fill: parent
+            rows: overviewPage.trafficRows("topDestinations")
+            emptyText: "No destinations in this packet range."
+            onRowActivated: (row) => overviewPage.activateRow(row)
+        }
+    }
+
+    Component {
+        id: servicesContent
+
+        OverviewTrafficRows {
+            anchors.fill: parent
+            rows: overviewPage.trafficRows("services")
+            emptyText: "No services in this packet range."
+            onRowActivated: (row) => overviewPage.activateRow(row)
+        }
+    }
+
+    Component {
+        id: conversationsContent
+
+        OverviewTrafficRows {
+            anchors.fill: parent
+            rows: overviewPage.trafficRows("conversations")
+            emptyText: "No conversations in this packet range."
+            onRowActivated: (row) => overviewPage.activateRow(row)
+        }
+    }
+
+    Component {
+        id: tcpAnalysisContent
+
+        OverviewTCPAnalysis {
+            anchors.fill: parent
+            rows: overviewPage.tcpRows()
+            tcpPackets: overviewPage.tcpPackets
+            totalPackets: overviewPage.totalPackets
+            emptyTitle: overviewPage.tcpEmptyTitle()
+            emptyDetail: overviewPage.tcpEmptyDetail()
+            onFilterActivated: (filter) => overviewPage.applyDisplayFilter(filter)
+        }
+    }
+
+    Component {
+        id: packetLengthsContent
+
+        OverviewLengthsChart {
+            anchors.fill: parent
+            counts: overviewPage.overview && overviewPage.overview.packet_lengths
+                ? overviewPage.overview.packet_lengths : []
+            totalPackets: overviewPage.totalPackets
+            totalBytes: overviewPage.totalBytes
         }
     }
 }

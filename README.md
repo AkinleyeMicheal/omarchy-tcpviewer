@@ -7,14 +7,16 @@ Proxyman LLC — a native packet viewer with a live Overview dashboard, packet
 table, filters, packet details, hex view, stream following, statistics and diff,
 powered by Wireshark's dissection libraries.
 
-The Overview page (shown above) opens by default: traffic totals, packets- and
-bytes-per-second, protocol share, top endpoints and TCP analysis counts, all
-computed from the loaded capture's buffer. Cards like *Top Domains & IPs* and
-*TCP Analysis* are click-through: selecting a row applies the matching display
-filter in the packet table. The **Share** header action exports the dashboard
-as Markdown (Copy / Save, mirroring upstream). The cover is a live Ethernet
-capture taken after a couple of minutes of ordinary traffic, so the dashboard
-shows real process attribution (Top Apps) and endpoint ranking.
+The Overview page (shown above) opens by default: five summary tiles, then a
+three-column grid of chart cards for packets, throughput, protocol share, top
+apps, endpoint ranking, TCP analysis, conversations and services. Cards like
+*Top Domains & IPs* and *TCP Analysis* are click-through: selecting a row
+applies the matching display filter in the packet table. The **Share** header
+action exports the dashboard as Markdown (Copy / Save, mirroring upstream).
+The in-grid **Add Chart** cell shows or hides cards; the layout is saved across
+launches. The cover is a live Ethernet capture taken after a couple of minutes of
+ordinary traffic, so the dashboard shows real process attribution (Top Apps)
+and endpoint ranking.
 
 ## Install (Omarchy plugin)
 
@@ -152,18 +154,25 @@ scripts/tcpviewer-run.sh
 Recomputed from the packet buffer on demand (per-source, revision-cached), so
 it stays in sync with filters, appends and file loads:
 
-- **Tiles** — packets, data transferred, average throughput, capture duration,
-  TCP issues, apps/domains seen.
-- **Packets / Throughput** — per-slot bar and rate charts; red segments mark
-  slots with TCP analysis errors (retransmissions, lost segments, duplicate
-  ACKs, resets).
-- **Protocols / Top Apps / Top Domains & IPs / TCP Analysis** — share of
-  captured bytes, attributed processes (live captures), endpoint ranking and
-  issue breakdown; every row is a filter shortcut.
-- **+ Add a card** — show/hide individual cards per source; persisted in QSettings.
+- **Tiles** — Packets, Data Transferred, Average Throughput, TCP Issues and
+  Apps.
+- **Packets / Throughput** — one-second stacked bars and rate lines with
+  timestamp and numeric axes; red bar segments mark TCP analysis errors
+  (retransmissions, lost segments, duplicate ACKs, resets), and the peak rate
+  is shown above each chart.
+- **Protocols / Top Apps / Top Domains & IPs / Top Conversations** — ranked
+  split bars for sent/received bytes, packet counts, percentages and warning
+  pills for TCP issues; every row is a filter shortcut.
+- **TCP Analysis / Services & Ports** — a stacked issue bar with category,
+  count and percentage legend; services show server port, name, transport,
+  share of bytes and total bytes. *Services & Ports* is the last chart card
+  before the Add Chart cell.
+- **+ Add Chart** — show or hide individual cards; the picker and card order
+  are persisted in QSettings. The charts are an in-repo Qt Quick Canvas layer,
+  so no `qt6-charts` or KQuickCharts dependency is required.
 
-The packet table remains one click away via the segmented
-**Overview | Packets** control in the page header.
+The packet table remains one click away via the **View Packets** button in the
+page header.
 
 ## Menus and columns
 

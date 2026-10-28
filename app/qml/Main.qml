@@ -1059,6 +1059,7 @@ ApplicationWindow {
                             if (window.captureMode !== mode)
                                 window.captureMode = mode
                         }
+                        onRequestEndpoints: statsWindow.openAndRaise()
                         visible: window.captureMode === "overview"
                     }
 

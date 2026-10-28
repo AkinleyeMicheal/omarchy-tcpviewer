@@ -43,6 +43,14 @@ set_source_files_properties(qml/Inspector.qml PROPERTIES QT_RESOURCE_ALIAS Inspe
 set_source_files_properties(qml/FollowStreamWindow.qml PROPERTIES QT_RESOURCE_ALIAS FollowStreamWindow.qml)
 set_source_files_properties(qml/EndpointStatisticsWindow.qml PROPERTIES QT_RESOURCE_ALIAS EndpointStatisticsWindow.qml)
 set_source_files_properties(qml/DiffWindow.qml PROPERTIES QT_RESOURCE_ALIAS DiffWindow.qml)
+set_source_files_properties(qml/Overview.qml PROPERTIES QT_RESOURCE_ALIAS Overview.qml)
+set_source_files_properties(qml/OverviewCard.qml PROPERTIES QT_RESOURCE_ALIAS OverviewCard.qml)
+set_source_files_properties(qml/OverviewTimeChart.qml PROPERTIES QT_RESOURCE_ALIAS OverviewTimeChart.qml)
+set_source_files_properties(qml/OverviewDonut.qml PROPERTIES QT_RESOURCE_ALIAS OverviewDonut.qml)
+set_source_files_properties(qml/OverviewTrafficRows.qml PROPERTIES QT_RESOURCE_ALIAS OverviewTrafficRows.qml)
+set_source_files_properties(qml/OverviewTCPAnalysis.qml PROPERTIES QT_RESOURCE_ALIAS OverviewTCPAnalysis.qml)
+set_source_files_properties(qml/OverviewLengthsChart.qml PROPERTIES QT_RESOURCE_ALIAS OverviewLengthsChart.qml)
+set_source_files_properties(qml/OverviewFormat.js PROPERTIES QT_RESOURCE_ALIAS OverviewFormat.js)
 set_source_files_properties(qml/Theme.qml PROPERTIES
     QT_RESOURCE_ALIAS Theme.qml
     QT_QML_SINGLETON_TYPE TRUE
@@ -55,6 +63,12 @@ qt_add_qml_module(omarchy-tcpviewer
         qml/Main.qml
         qml/Theme.qml
         qml/Overview.qml
+        qml/OverviewCard.qml
+        qml/OverviewTimeChart.qml
+        qml/OverviewDonut.qml
+        qml/OverviewTrafficRows.qml
+        qml/OverviewTCPAnalysis.qml
+        qml/OverviewLengthsChart.qml
         qml/OverviewFormat.js
         qml/PacketTableListView.qml
         qml/PacketTableView.qml

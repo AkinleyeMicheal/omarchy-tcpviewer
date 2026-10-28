@@ -1068,8 +1068,8 @@ PacketRow SessionController::parseSummary(const QVariantMap &summary)
 QVariantList SessionController::overviewCards() const
 {
     QSettings settings;
-    const QStringList names = settings.value(QStringLiteral("overview/cards"))
-                                  .toStringList();
+    QStringList names = settings.value(QStringLiteral("overview/cards"))
+                            .toStringList();
     static const QStringList known = {
         QStringLiteral("packets"), QStringLiteral("throughput"),
         QStringLiteral("protocols"), QStringLiteral("topApps"),
@@ -1077,6 +1077,28 @@ QVariantList SessionController::overviewCards() const
         QStringLiteral("conversations"), QStringLiteral("services"),
         QStringLiteral("packetLengths"),
     };
+    // v2 adds Top Conversations and Services & Ports to the original six-card
+    // default layout, making Services the last chart before the Add Chart
+    // cell. Migrate only untouched legacy defaults; custom layouts are kept.
+    static const QStringList legacyDefaults = {
+        QStringLiteral("packets"), QStringLiteral("throughput"),
+        QStringLiteral("protocols"), QStringLiteral("topApps"),
+        QStringLiteral("topDestinations"), QStringLiteral("tcpAnalysis"),
+    };
+    static const QStringList currentDefaults = {
+        QStringLiteral("packets"), QStringLiteral("throughput"),
+        QStringLiteral("protocols"), QStringLiteral("topApps"),
+        QStringLiteral("topDestinations"), QStringLiteral("tcpAnalysis"),
+        QStringLiteral("conversations"), QStringLiteral("services"),
+    };
+    const int layoutVersion = settings.value(QStringLiteral("overview/cardsVersion"), 1).toInt();
+    if (layoutVersion < 2) {
+        if (names.isEmpty() || names == legacyDefaults) {
+            names = currentDefaults;
+            settings.setValue(QStringLiteral("overview/cards"), names);
+        }
+        settings.setValue(QStringLiteral("overview/cardsVersion"), 2);
+    }
     QVariantList result;
     for (const QString &name : names) {
         if (known.contains(name) && !result.contains(name))
@@ -1095,4 +1117,5 @@ void SessionController::setOverviewCards(const QVariantList &cards)
     }
     QSettings settings;
     settings.setValue(QStringLiteral("overview/cards"), names);
+    settings.setValue(QStringLiteral("overview/cardsVersion"), 2);
 }

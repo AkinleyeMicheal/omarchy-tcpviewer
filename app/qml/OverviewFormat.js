@@ -105,45 +105,234 @@ function issueLabel(kind) {
 
 // ----- Overview "Share" export (upstream Share: Copy/Save as Markdown) -----
 
+// Keep capture-provided names inside one table cell. Do not allow HTML,
+// Markdown links or image syntax to escape from an untrusted packet field.
 function markdownEscape(value) {
-    return String(value).replace(/\|/g, "\\|").replace(/\n/g, " ")
+    return String(value)
+        .replace(/\\/g, "\\\\")
+        .replace(/\|/g, "\\|")
+        .replace(/\[/g, "\\[")
+        .replace(/\]/g, "\\]")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\r\n/g, " ")
+        .replace(/\r/g, " ")
+        .replace(/\n/g, " ")
 }
 
-// Card-style rows: title, bytes and share relative to the largest row.
-function rowsMarkdown(rows, emptyNotice) {
+function markdownTable(title, columns, rows) {
+    if (!rows || rows.length === 0)
+        return ""
+    var out = "## " + title + "\n\n"
+    var headers = []
+    var rules = []
+    for (var i = 0; i < columns.length; i++) {
+        headers.push(markdownEscape(columns[i].title))
+        rules.push(columns[i].numeric ? "---:" : "---")
+    }
+    out += "| " + headers.join(" | ") + " |\n"
+    out += "| " + rules.join(" | ") + " |\n"
+    for (var j = 0; j < rows.length; j++) {
+        var cells = []
+        for (var k = 0; k < rows[j].length; k++)
+            cells.push(markdownEscape(rows[j][k]))
+        out += "| " + cells.join(" | ") + " |\n"
+    }
+    return out + "\n"
+}
+
+function trafficColumns() {
+    return [
+        { title: "Packets", numeric: true },
+        { title: "Sent", numeric: true },
+        { title: "Received", numeric: true },
+        { title: "Total", numeric: true },
+        { title: "Share", numeric: true },
+        { title: "TCP Issues", numeric: true },
+    ]
+}
+
+function trafficCells(totals, all) {
+    var row = totals ? totals : {}
+    var overall = all ? all : {}
+    return [
+        count(row.packets),
+        bytes(row.sent_bytes),
+        bytes(row.received_bytes),
+        bytes(row.bytes),
+        percent(row.bytes, overall.bytes),
+        count(row.issue_packets),
+    ]
+}
+
+function protocolMarkdown(data) {
+    var rows = []
+    var protocols = data.protocols ? data.protocols : []
+    for (var i = 0; i < protocols.length; i++) {
+        var row = protocols[i]
+        var totals = row.totals ? row.totals : {}
+        rows.push([
+            row.title,
+            count(totals.packets),
+            bytes(totals.bytes),
+            percent(totals.bytes, (data.totals ? data.totals.bytes : 0)),
+        ])
+    }
+    return markdownTable("Protocols", [
+        { title: "Protocol", numeric: false },
+        { title: "Packets", numeric: true },
+        { title: "Data", numeric: true },
+        { title: "Share", numeric: true },
+    ], rows)
+}
+
+function sourceMarkdown(title, nameTitle, rows, totals) {
+    var tableRows = []
     var list = rows ? rows : []
-    if (list.length === 0)
-        return emptyNotice && emptyNotice.length > 0 ? "_" + emptyNotice + "_" : ""
-    var maxBytes = 0
-    var totals = []
     for (var i = 0; i < list.length; i++) {
-        var rowTotals = list[i].totals ? list[i].totals : {}
-        var b = Number(rowTotals.bytes) || 0
-        totals.push({ title: list[i].title, bytes: b, packets: Number(rowTotals.packets) || 0 })
-        maxBytes = Math.max(maxBytes, b)
+        var row = list[i]
+        tableRows.push([String(i + 1), row.title]
+            .concat(trafficCells(row.totals, totals)))
     }
-    var out = "| Row | Bytes | Share |\n| --- | --- | --- |\n"
-    for (var j = 0; j < totals.length; j++) {
-        var share = maxBytes > 0 ? Math.round((totals[j].bytes / maxBytes) * 1000) / 10 : 0
-        out += "| " + markdownEscape(totals[j].title) + " | " + bytes(totals[j].bytes)
-            + " | " + share.toFixed(1) + "% |\n"
-    }
-    return out
+    return markdownTable(title, [
+        { title: "#", numeric: true },
+        { title: nameTitle, numeric: false },
+    ].concat(trafficColumns()), tableRows)
 }
 
-function tcpIssuesMarkdown(issues) {
-    var list = issues ? issues : []
-    if (list.length === 0)
-        return "_No flagged packets_"
-    var out = "| Issue | Packets |\n| --- | --- |\n"
-    for (var i = 0; i < list.length; i++)
-        out += "| " + markdownEscape(issueLabel(list[i].kind)) + " | " + count(list[i].packets) + " |\n"
-    return out
+function tcpAnalysisMarkdown(data) {
+    var issues = data.tcp_issues ? data.tcp_issues : []
+    var tcp = Number(data.tcp_packet_count) || 0
+    if (issues.length === 0) {
+        return "## TCP Analysis\n\n"
+            + (tcp > 0
+                ? "No TCP problems detected in " + count(tcp) + " TCP packets."
+                : "No TCP traffic.") + "\n\n"
+    }
+    var rows = []
+    for (var i = 0; i < issues.length; i++) {
+        var issue = issues[i]
+        var base = String(issue.kind) === "malformed"
+            ? Number(data.totals ? data.totals.packets : 0) : tcp
+        rows.push([
+            issueLabel(issue.kind),
+            count(issue.packets),
+            percent(issue.packets, base),
+            "`" + String(issue.filter || "") + "`",
+        ])
+    }
+    return markdownTable("TCP Analysis", [
+        { title: "Problem", numeric: false },
+        { title: "Packets", numeric: true },
+        { title: "Share", numeric: true },
+        { title: "Wireshark filter", numeric: false },
+    ], rows)
 }
 
-// Full overview summary in the shape of the dashboard's cards. `sourceLabel`
+function conversationTransport(row) {
+    if (row && row.transport)
+        return String(row.transport)
+    var key = String(row && row.key ? row.key : "")
+    if (key.indexOf("udp") >= 0)
+        return "udp"
+    if (key.indexOf("icmp") >= 0)
+        return "icmp"
+    return "tcp"
+}
+
+function conversationsMarkdown(data) {
+    var rows = []
+    var list = data.top_conversations ? data.top_conversations : []
+    for (var i = 0; i < list.length; i++) {
+        var row = list[i]
+        var client = String(row.client_address || "") + ":" + String(row.client_port || "")
+        var server = String(row.server_address || "") + ":" + String(row.server_port || "")
+        rows.push([String(i + 1), client, server,
+                   conversationTransport(row),
+                   row.domain_name || "\u2013",
+                   row.app_name || "\u2013"]
+            .concat(trafficCells(row.totals, data.totals)))
+    }
+    return markdownTable("Top Conversations", [
+        { title: "#", numeric: true },
+        { title: "Client", numeric: false },
+        { title: "Server", numeric: false },
+        { title: "Transport", numeric: false },
+        { title: "Domain", numeric: false },
+        { title: "App", numeric: false },
+    ].concat(trafficColumns()), rows)
+}
+
+function servicesMarkdown(data) {
+    var rows = []
+    var list = data.top_services ? data.top_services : []
+    for (var i = 0; i < list.length; i++) {
+        var row = list[i]
+        rows.push([String(i + 1),
+                   String(row.port || "") + "/" + String(row.transport || ""),
+                   row.service_name || "\u2013"]
+            .concat(trafficCells(row.totals, data.totals)))
+    }
+    return markdownTable("Services & Ports", [
+        { title: "#", numeric: true },
+        { title: "Port", numeric: false },
+        { title: "Service", numeric: false },
+    ].concat(trafficColumns()), rows)
+}
+
+function packetLengthsMarkdown(data) {
+    var rows = []
+    var list = data.packet_lengths ? data.packet_lengths : []
+    for (var i = 0; i < list.length; i++) {
+        var value = Number(list[i]) || 0
+        if (value > 0) {
+            rows.push([lengthBucketTitle(i), count(value),
+                       percent(value, data.totals ? data.totals.packets : 0)])
+        }
+    }
+    return markdownTable("Packet Lengths", [
+        { title: "Length", numeric: false },
+        { title: "Packets", numeric: true },
+        { title: "Share", numeric: true },
+    ], rows)
+}
+
+function busiestMomentsMarkdown(data) {
+    var points = data.timeline ? data.timeline.slice() : []
+    var interval = Math.max(1, Number(data.timeline_interval_ms) || 1000)
+    points.sort(function (lhs, rhs) {
+        var lp = Number(lhs.totals ? lhs.totals.packets : 0) || 0
+        var rp = Number(rhs.totals ? rhs.totals.packets : 0) || 0
+        if (lp !== rp)
+            return rp - lp
+        return (Number(lhs.date_ms) || 0) - (Number(rhs.date_ms) || 0)
+    })
+    var rows = []
+    for (var i = 0; i < points.length && rows.length < 5; i++) {
+        var totals = points[i].totals ? points[i].totals : {}
+        if ((Number(totals.packets) || 0) === 0)
+            continue
+        rows.push([
+            clockTime(points[i].date_ms) + " (+" + span(interval) + ")",
+            count(totals.packets),
+            count(totals.issue_packets),
+            bytes(totals.bytes),
+            rate((Number(totals.bytes) || 0) / (interval / 1000)),
+        ])
+    }
+    return markdownTable("Busiest Moments", [
+        { title: "Time slot", numeric: false },
+        { title: "Packets", numeric: true },
+        { title: "TCP Issues", numeric: true },
+        { title: "Data", numeric: true },
+        { title: "Rate", numeric: true },
+    ], rows)
+}
+
+// Full overview summary in the shape of the dashboard's cards. `cards` is the
+// visible picker order, so the report matches what the user sees. `sourceLabel`
 // is the header subtitle (basename or "Live on <iface>").
-function summaryMarkdown(overview, sourceLabel) {
+function summaryMarkdown(overview, sourceLabel, cards) {
     var data = overview ? overview : {}
     var totals = data.totals ? data.totals : {}
     var packets = Number(totals.packets) || 0
@@ -158,9 +347,14 @@ function summaryMarkdown(overview, sourceLabel) {
     var tcp = Number(data.tcp_packet_count) || 0
     var issuePackets = Number(totals.issue_packets) || 0
 
-    var out = "# TCP Viewer overview\n\n"
+    var out = "# TCP Viewer Overview\n\n"
     if (sourceLabel && sourceLabel.length > 0)
-        out += "Source: **" + markdownEscape(sourceLabel) + "**\n\n"
+        out += "_" + markdownEscape(sourceLabel) + "_\n\n"
+    if (packets === 0) {
+        out += "No packets were captured.\n"
+        return out
+    }
+
     out += "- Packets: " + count(packets)
         + (spanSeconds >= 1
             ? " (" + (pps >= 1 ? count(pps) : "<1") + " packets/s avg)"
@@ -168,20 +362,46 @@ function summaryMarkdown(overview, sourceLabel) {
         + "\n"
     out += "- Data transferred: " + bytes(bytesCount)
     if (sent > 0 || received > 0)
-        out += " (↑ " + bytes(sent) + " · ↓ " + bytes(received) + ")"
+        out += " (\u2191 " + bytes(sent) + " \u00b7 \u2193 " + bytes(received) + ")"
     out += "\n"
     out += "- Average throughput: " + rate(spanSeconds > 0 ? bytesCount / spanSeconds : 0)
         + " (" + span(duration) + " captured)\n"
     out += "- TCP packets: " + count(tcp)
-        + (issuePackets > 0 ? " — " + count(issuePackets) + " flagged (" + percent(issuePackets, tcp) + ")" : "")
+        + (issuePackets > 0 ? " \u2014 " + count(issuePackets) + " flagged ("
+                              + percent(issuePackets, tcp) + ")" : "")
         + "\n"
     out += "- Apps: " + count(Number(data.app_count) || 0)
-        + " · Domains: " + count(Number(data.domain_count) || 0) + "\n"
+        + " \u00b7 Domains: " + count(Number(data.domain_count) || 0) + "\n\n"
 
-    out += "\n## Protocols\n\n" + rowsMarkdown(data.protocols, "No protocol traffic recorded")
-    out += "\n## Top Apps\n\n" + rowsMarkdown(data.top_apps,
-        "Apps appear once live traffic is attributed to local processes")
-    out += "\n## Top Destinations\n\n" + rowsMarkdown(data.top_destinations, "No destinations recorded")
-    out += "\n## TCP Analysis\n\n" + tcpIssuesMarkdown(data.tcp_issues)
+    var order = cards && cards.length > 0 ? cards : [
+        "packets", "throughput", "protocols", "topApps", "topDestinations",
+        "tcpAnalysis", "conversations", "services", "packetLengths",
+    ]
+    var activityDone = false
+    for (var i = 0; i < order.length; i++) {
+        var card = String(order[i])
+        if (card === "packets" || card === "throughput") {
+            if (!activityDone) {
+                activityDone = true
+                out += busiestMomentsMarkdown(data)
+            }
+        } else if (card === "protocols") {
+            out += protocolMarkdown(data)
+        } else if (card === "topApps") {
+            out += sourceMarkdown("Top Apps", "App", data.top_apps, totals)
+        } else if (card === "topDestinations") {
+            out += sourceMarkdown("Top Domains & IPs", "Destination",
+                                 data.top_destinations, totals)
+        } else if (card === "tcpAnalysis") {
+            out += tcpAnalysisMarkdown(data)
+        } else if (card === "conversations") {
+            out += conversationsMarkdown(data)
+        } else if (card === "services") {
+            out += servicesMarkdown(data)
+        } else if (card === "packetLengths") {
+            out += packetLengthsMarkdown(data)
+        }
+    }
     return out
 }
+
