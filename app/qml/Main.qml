@@ -381,11 +381,13 @@ ApplicationWindow {
                 visible: !session.interfacesHidden
                 color: !session.connected
                     ? Theme.separator
-                    : (session.capturing ? Theme.systemRed : Theme.accent)
+                    : (session.stopInFlight ? Theme.systemOrange
+                                            : (session.capturing ? Theme.systemRed : Theme.accent))
 
                 Text {
                     anchors.centerIn: parent
-                    text: session.capturing ? "Stop" : "Start"
+                    text: session.stopInFlight ? "Stopping…"
+                        : (session.capturing ? "Stop" : "Start")
                     font.family: Theme.uiFont
                     font.pixelSize: Theme.uiSmall
                     font.weight: Font.DemiBold
@@ -395,6 +397,8 @@ ApplicationWindow {
                 MouseArea {
                     anchors.fill: parent
                     onClicked: {
+                        if (session.stopInFlight)
+                            return
                         if (session.capturing)
                             session.stopCapture()
                         else

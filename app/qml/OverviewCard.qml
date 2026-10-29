@@ -13,6 +13,12 @@ Rectangle {
     property string glyph: "•"
     property color tint: Theme.accent
 
+    // Empty-state body (upstream CaptureOverviewCardView placeholder): when
+    // emptyMessage is non-empty the content slot is replaced by a centered
+    // tinted glyph, message and optional detail line.
+    property string emptyMessage: ""
+    property string emptyDetail: ""
+
     signal removeRequested()
 
     default property alias contentData: contentHost.data
@@ -106,7 +112,7 @@ Rectangle {
     }
 
     // Content slot. Children declared inside an OverviewCard are parented here
-    // and can use anchors.fill: parent.
+    // and can use anchors.fill: parent. Hidden while the empty state shows.
     Item {
         id: contentHost
 
@@ -115,6 +121,55 @@ Rectangle {
         width: card.width - 32
         height: card.height - 70
         clip: true
+        visible: card.emptyMessage.length === 0
+    }
+
+    // Empty-state body: centered tinted glyph tile, message and detail line.
+    Column {
+        anchors.centerIn: contentHost
+        spacing: 8
+        visible: card.emptyMessage.length > 0
+
+        Rectangle {
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: 40
+            height: 40
+            radius: 12
+            color: Qt.rgba(card.tint.r, card.tint.g, card.tint.b, 0.14)
+
+            Text {
+                anchors.centerIn: parent
+                text: card.glyph
+                font.family: Theme.uiFont
+                font.pixelSize: 16
+                color: card.tint
+            }
+        }
+
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: contentHost.width - 16
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            text: card.emptyMessage
+            font.family: Theme.uiFont
+            font.pixelSize: Theme.uiSmall
+            font.weight: Font.DemiBold
+            color: Theme.secondaryLabel
+        }
+
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: contentHost.width - 16
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            visible: card.emptyDetail.length > 0
+            text: card.emptyDetail
+            font.family: Theme.uiFont
+            font.pixelSize: 11
+            color: Theme.secondaryLabel
+            opacity: 0.8
+        }
     }
 
     TapHandler {

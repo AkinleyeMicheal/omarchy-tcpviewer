@@ -204,13 +204,34 @@ Window {
                 }
 
                 // Upstream placeholder when nothing flows yet.
-                Text {
+                Column {
                     anchors.centerIn: parent
+                    spacing: 8
                     visible: stats.count === 0
-                    text: qsTr("No Traffic")
-                    font.family: Theme.uiFont
-                    font.pixelSize: Theme.uiSize
-                    color: Theme.secondaryLabel
+
+                    Text {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: "⇄"
+                        font.family: Theme.uiFont
+                        font.pixelSize: 30
+                        color: Theme.secondaryLabel
+                        opacity: 0.5
+                    }
+                    Text {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: qsTr("No Traffic")
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.uiSize
+                        font.weight: Font.DemiBold
+                        color: Theme.label
+                    }
+                    Text {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: qsTr("Endpoints appear here once traffic is captured or a file is opened.")
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.uiSmall
+                        color: Theme.secondaryLabel
+                    }
                 }
             }
 

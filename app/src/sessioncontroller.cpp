@@ -165,8 +165,10 @@ bool SessionController::capturing() const
 void SessionController::handleConnectedChanged()
 {
     emit connectedChanged();
-    if (!m_client->connected())
+    if (!m_client->connected()) {
+        setStopInFlight(false);
         return;
+    }
 
     if (!m_pendingOpenFiles.isEmpty()) {
         QVariantList paths;
@@ -245,6 +247,9 @@ void SessionController::stopCapture()
 {
     if (!m_client->connected())
         return;
+    // Immediate button feedback: the daemon may take a while (queued reads,
+    // in-flight follow ops) before the stop reply reports "stopped".
+    setStopInFlight(true);
     QVariantMap params;
     if (!m_currentSourceID.isEmpty())
         params.insert(QStringLiteral("source_id"), m_currentSourceID);
@@ -354,6 +359,7 @@ void SessionController::selectSourceInternal(const QString &sourceID)
     m_currentSourceID = sourceID;
     m_customColumns->setSourceID(sourceID);
     m_status.clear();
+    setStopInFlight(false);
     m_totalCount = 0;
     m_lastPacketID = 0;
     m_lastPacketTimestamp = 0;
@@ -691,6 +697,7 @@ void SessionController::handleResponse(const QString &command, const QVariantMap
         const QString sourceID = data.value(QStringLiteral("source_id")).toString();
         selectSourceInternal(sourceID);
         setStatus(data);
+        setStopInFlight(false);
         refreshSources();
         return;
     }
@@ -731,6 +738,7 @@ void SessionController::handleResponse(const QString &command, const QVariantMap
         || command == QStringLiteral("capture.pause")
         || command == QStringLiteral("capture.resume")) {
         setStatus(data);
+        setStopInFlight(false);
         refreshSources();
         return;
     }
@@ -823,6 +831,12 @@ void SessionController::handleFailure(const QString &command, const QString &cod
 {
     m_requestInFlight = false;
 
+    // A lost/failed stop reply must not leave the button wedged on
+    // "Stopping…"; the status poll still reflects the true phase.
+    if (command == QStringLiteral("capture.stop")) {
+        setStopInFlight(false);
+    }
+
     // Overview fetches fail silently: the page keeps the last snapshot and
     // the poller retries, so a momentary daemon hiccup doesn't nag.
     if (command == QStringLiteral("capture.overview")) {
@@ -898,6 +912,11 @@ void SessionController::setStatus(const QVariantMap &status)
         if (!message.isEmpty())
             setError(message);
     }
+    // A phase that leaves running/paused/starting means the stop landed —
+    // clear the in-flight marker even if the capture.stop reply was lost.
+    if (phase == QStringLiteral("stopped") || phase == QStringLiteral("failed")
+        || phase == QStringLiteral("ready") || phase.isEmpty())
+        setStopInFlight(false);
 }
 
 void SessionController::setError(const QString &message)
@@ -956,6 +975,14 @@ void SessionController::setLoading(bool loading)
         return;
     m_loading = loading;
     emit loadingChanged();
+}
+
+void SessionController::setStopInFlight(bool stopInFlight)
+{
+    if (m_stopInFlight == stopInFlight)
+        return;
+    m_stopInFlight = stopInFlight;
+    emit stopInFlightChanged();
 }
 
 void SessionController::setTotalCount(int total)

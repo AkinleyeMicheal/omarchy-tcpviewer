@@ -38,6 +38,10 @@ class SessionController : public QObject
     // Drives the "Loading file k of N…" status text (upstream importer).
     Q_PROPERTY(QVariantMap importProgress READ importProgress NOTIFY sourcesChanged)
     Q_PROPERTY(bool capturing READ capturing NOTIFY statusChanged)
+    // True between a Stop click and the capture.stop reply (or a status
+    // change to a non-capturing phase): bridges daemon-side stop latency
+    // (queued reads, in-flight follow ops) with button feedback.
+    Q_PROPERTY(bool stopInFlight READ stopInFlight NOTIFY stopInFlightChanged)
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
     Q_PROPERTY(int totalCount READ totalCount NOTIFY totalCountChanged)
     Q_PROPERTY(QString currentSourceID READ currentSourceID NOTIFY currentSourceChanged)
@@ -95,6 +99,7 @@ public:
     QVariantMap importProgress() const;
     bool importing() const { return !m_importPaths.isEmpty(); }
     bool capturing() const;
+    bool stopInFlight() const { return m_stopInFlight; }
     bool connected() const;
     int totalCount() const { return m_totalCount; }
     QString currentSourceID() const { return m_currentSourceID; }
@@ -189,6 +194,7 @@ signals:
     void exportFinished(const QString &path, int packetCount);
     void overviewChanged();
     void overviewLoadingChanged();
+    void stopInFlightChanged();
 
 private:
     void handleConnectedChanged();
@@ -204,6 +210,7 @@ private:
     void persistSavedFilters();
     void setError(const QString &message);
     void setLoading(bool loading);
+    void setStopInFlight(bool stopInFlight);
     void setTotalCount(int total);
     void setFilterTextInternal(const QString &filter);
     void applyTreeSelectHook();
@@ -241,6 +248,7 @@ private:
     bool m_loading = false;
     bool m_requestInFlight = false;
     bool m_overviewLoading = false;
+    bool m_stopInFlight = false;
     int m_totalCount = 0;
     quint64 m_lastPacketID = 0;
     qint64 m_lastPacketTimestamp = 0;

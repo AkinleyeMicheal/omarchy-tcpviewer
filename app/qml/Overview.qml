@@ -74,6 +74,13 @@ Rectangle {
 
     readonly property bool hasData: totalPackets > 0
 
+    // A capture source exists (live or opened file). Drives the per-card
+    // empty-state detail copy when the dashboard has no packets yet.
+    readonly property bool hasSource: {
+        var id = session ? String(session.status.source_id || "") : ""
+        return id.length > 0
+    }
+
     // Grid geometry. Cards are fixed-height like upstream (340px); the width
     // resolves against the grid content, not the page, so three columns fit
     // inside the 24px page margins without clipping the last card.
@@ -256,6 +263,37 @@ Rectangle {
         return tcpPackets > 0
             ? "No retransmissions, lost segments, zero windows or resets."
             : "TCP problems appear here as packets are analyzed."
+    }
+
+    // Per-card empty-state title shown while the dashboard has no packets
+    // (upstream CaptureOverviewCardView placeholder copy).
+    function cardEmptyTitle(kind) {
+        switch (String(kind)) {
+        case "packets": return "No packets yet"
+        case "throughput": return "No traffic yet"
+        case "protocols": return "No protocols yet"
+        case "topApps": return "No apps yet"
+        case "topDestinations": return "No destinations yet"
+        case "tcpAnalysis": return tcpEmptyTitle()
+        case "conversations": return "No conversations yet"
+        case "services": return "No services yet"
+        case "packetLengths": return "No lengths yet"
+        }
+        return ""
+    }
+
+    function cardEmptyDetail(kind) {
+        if (String(kind) === "tcpAnalysis")
+            return tcpEmptyDetail()
+        if (!overviewPage.session)
+            return ""
+        if (overviewPage.session.loading)
+            return "Loading…"
+        if (!overviewPage.hasSource)
+            return "Start a capture or open a capture file."
+        if (overviewPage.session.capturing)
+            return "Waiting for packets…"
+        return "No packets in the current range."
     }
 
     function directionText(totals) {
@@ -661,18 +699,17 @@ Rectangle {
             OverviewMetrics {
                 width: parent.width
                 overview: overviewPage.overview
-                visible: overviewPage.hasData
             }
 
             // Card grid: visible cards + the Add Chart cell, chunked into
             // explicit rows so cross-row gaps stay equal and the last card is
-            // never clipped by a Grid's implicit sizing.
+            // never clipped by a Grid's implicit sizing. Always present —
+            // cards show their empty states while no packets have arrived.
             Column {
                 id: cardGrid
 
                 width: parent.width
                 spacing: overviewPage.cardSpacing
-                visible: overviewPage.hasData
 
                 Repeater {
                     model: overviewPage.cardRows
@@ -698,6 +735,10 @@ Rectangle {
                                     subtitle: overviewPage.cardSubtitle(modelData)
                                     glyph: overviewPage.cardGlyph(modelData)
                                     tint: overviewPage.cardTint(modelData)
+                                    emptyMessage: overviewPage.hasData
+                                        ? "" : overviewPage.cardEmptyTitle(modelData)
+                                    emptyDetail: overviewPage.hasData
+                                        ? "" : overviewPage.cardEmptyDetail(modelData)
                                     onRemoveRequested: overviewPage.removeCard(modelData)
 
                                     Loader {
@@ -752,27 +793,6 @@ Rectangle {
                         return false
                     }
                     onTriggered: overviewPage.restoreDefaults()
-                }
-            }
-
-            // Empty capture message ------------------------------------------
-            Column {
-                width: parent.width
-                spacing: 6
-                visible: !overviewPage.hasData && !overviewPage.session.loading
-
-                Text {
-                    text: "No packets yet"
-                    font.family: Theme.uiFont
-                    font.pixelSize: Theme.uiSize
-                    font.weight: Font.DemiBold
-                    color: Theme.label
-                }
-                Text {
-                    text: "Start a capture or open a capture file to populate the Overview."
-                    font.family: Theme.uiFont
-                    font.pixelSize: Theme.uiSmall
-                    color: Theme.secondaryLabel
                 }
             }
         }

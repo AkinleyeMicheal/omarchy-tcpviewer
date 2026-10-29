@@ -376,9 +376,11 @@ private final class NativeLiveCaptureSessionState: @unchecked Sendable {
     private var packetSummaryTextByID: [PacketSummary.ID: LivePacketSummaryText] = [:]
     private var durationStopWorkItem: DispatchWorkItem?
     private var durationStopTimer: LiveCaptureDurationStopTimer?
+    private let interfaceID: String
 
     init(interfaceID: String, options: CaptureOptions, disablesWireshark: Bool, eventBox: EventCallbackBox<PacketIngestEvent>) throws {
         self.eventBox = eventBox
+        self.interfaceID = interfaceID
         self.stopCondition = options.stopCondition
         if case .durationMilliseconds(let duration) = options.stopCondition {
             self.durationStopTimer = LiveCaptureDurationStopTimer(durationMilliseconds: duration)
@@ -659,6 +661,11 @@ private final class NativeLiveCaptureSessionState: @unchecked Sendable {
                 startedAt = Date()
             }
             scheduleDurationStopIfNeeded()
+            // The native phase event rides the async session-queue hop and
+            // would land after this completion, so the start reply could
+            // report the stale "ready" phase. Yield it synchronously; the
+            // later async duplicate is idempotent.
+            yieldPhaseOnQueue(.running, "Capture running on \(interfaceID).")
         } catch {
             let tcpviewerError = NativeBridgeMapper.coreError(error, defaultCode: .liveSessionStartFailed)
             phase = .failed
@@ -674,6 +681,8 @@ private final class NativeLiveCaptureSessionState: @unchecked Sendable {
         do {
             try nativeSession.pause()
             flushPendingPacketBatch()
+            // Synchronous yield so the pause reply cannot report "running".
+            yieldPhaseOnQueue(.paused, "Capture paused.")
         } catch {
             if didPauseTimer {
                 scheduleDurationStopIfNeeded()
@@ -686,6 +695,8 @@ private final class NativeLiveCaptureSessionState: @unchecked Sendable {
         do {
             try nativeSession.resume()
             scheduleDurationStopIfNeeded()
+            // Synchronous yield so the resume reply cannot report "paused".
+            yieldPhaseOnQueue(.running, "Capture resumed.")
         } catch {
             throw NativeBridgeMapper.coreError(error, defaultCode: .liveSessionControlFailed)
         }
@@ -718,9 +729,10 @@ private final class NativeLiveCaptureSessionState: @unchecked Sendable {
         do {
             try nativeSession.stop()
             flushPendingPacketBatch()
-            if let reason {
-                eventBox.yield(.liveStateChanged(phase: .stopped, message: reason))
-            }
+            // Synchronous yield so the stop reply cannot report "running";
+            // without it the phase event hops the session queue and lands
+            // after this completion. `reason` keeps the duration-limit text.
+            yieldPhaseOnQueue(.stopped, reason ?? "Capture stopped.")
         } catch {
             throw NativeBridgeMapper.coreError(error, defaultCode: .liveSessionControlFailed)
         }
@@ -757,7 +769,19 @@ private final class NativeLiveCaptureSessionState: @unchecked Sendable {
     }
 
     private func handlePhaseChange(_ phase: PCPPNativeLiveSessionPhase, message: String) {
-        let mappedPhase = NativeBridgeMapper.livePhase(phase)
+        yieldPhaseOnQueue(NativeBridgeMapper.livePhase(phase), message)
+    }
+
+    // Runs on the session queue. Control replies (start/pause/resume/stop)
+    // call this synchronously so their completions observe the transition,
+    // while the native phaseHandler's async duplicate lands idempotently.
+    // Drop exact replays and stale backward steps ("starting" after a
+    // synchronous "running", "stopping" after "stopped") so sources never
+    // regress while the async hop drains.
+    private func yieldPhaseOnQueue(_ mappedPhase: LiveCaptureSessionPhase, _ message: String) {
+        if mappedPhase == phase { return }
+        if mappedPhase == .starting && phase != .ready { return }
+        if mappedPhase == .stopping && phase == .stopped { return }
         if mappedPhase == .paused || mappedPhase == .stopped || mappedPhase == .failed {
             flushPendingPacketBatch()
         }
