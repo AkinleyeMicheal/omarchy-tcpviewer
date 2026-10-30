@@ -77,7 +77,7 @@ QVector<PacketColumnLayout::Definition> PacketColumnLayout::defaultDefinitions()
         {QStringLiteral("length"), QStringLiteral("Length"), QStringLiteral("length"), {}, 80, 68, true, true, false},
         {QStringLiteral("summary"), QStringLiteral("Summary"), QStringLiteral("summary"), {}, 320, 120, true, true, false},
         {QStringLiteral("tags"), QStringLiteral("Tags"), QStringLiteral("tags"), {}, 140, 90, false, true, false},
-        {QStringLiteral("comment"), QStringLiteral("Comment"), QStringLiteral("comment"), {}, 320, 140, false, true, false},
+        {QStringLiteral("comment"), QStringLiteral("Comment"), QStringLiteral("comment"), {}, 320, 140, true, true, false},
     };
 }
 

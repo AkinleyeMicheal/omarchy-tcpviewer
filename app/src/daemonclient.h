@@ -37,6 +37,10 @@ public:
 signals:
     void connectedChanged();
     void response(const QString &command, const QVariantMap &data);
+    // Same payload as response() plus the originating request id, for
+    // callers that must drop replies from superseded fetches.
+    void responseObject(const QString &command, const QString &requestID,
+                        const QVariantMap &data);
     void failure(const QString &command, const QString &code, const QString &message);
     // Request-scoped failure for callers that may have abandoned a request
     // (custom columns) and must not consume another request's error.

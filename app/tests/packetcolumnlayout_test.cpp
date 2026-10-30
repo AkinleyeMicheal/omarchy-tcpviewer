@@ -37,15 +37,17 @@ void PacketColumnLayoutTest::defaultsAndLimits()
     QVERIFY(directory.isValid());
     PacketColumnLayout layout(nullptr, directory.filePath(QStringLiteral("settings.ini")));
 
-    QCOMPARE(layout.visibleCount(), 9);
+    // Upstream PacketTableColumnService: Comment is a default-visible
+    // built-in kept as the flexible trailing column.
+    QCOMPARE(layout.visibleCount(), 10);
     QCOMPARE(layout.columns().first().toMap().value(QStringLiteral("id")).toString(),
              QStringLiteral("number"));
     QCOMPARE(layout.columns().last().toMap().value(QStringLiteral("id")).toString(),
-             QStringLiteral("summary"));
+             QStringLiteral("comment"));
     QVERIFY(!menuEntryVisible(layout, QStringLiteral("sourcePort")));
 
     QVERIFY(layout.toggleColumn(QStringLiteral("sourcePort")));
-    QCOMPARE(layout.visibleCount(), 10);
+    QCOMPARE(layout.visibleCount(), 11);
     QVERIFY(menuEntryVisible(layout, QStringLiteral("sourcePort")));
 
     QVERIFY(layout.setColumnWidth(QStringLiteral("source"), 1));
@@ -133,7 +135,7 @@ void PacketColumnLayoutTest::ignoresMalformedSettings()
     }
 
     PacketColumnLayout layout(nullptr, settings);
-    QCOMPARE(layout.visibleCount(), 9);
+    QCOMPARE(layout.visibleCount(), 10);
     QVERIFY(layout.customColumns().isEmpty());
 }
 

@@ -128,6 +128,7 @@ final class SourceManager: @unchecked Sendable {
             withIDs identifiers: [PacketSummary.ID],
             to url: URL,
             format: CaptureFileFormat,
+            metadata: PacketExportMetadata,
             progress: PacketExportProgressHandler?,
             shouldCancel: PacketExportCancellationCheck?,
             completion: @escaping TCPViewerVoidCompletion
@@ -135,14 +136,40 @@ final class SourceManager: @unchecked Sendable {
             if let liveSession {
                 liveSession.exportPackets(
                     withIDs: identifiers, to: url, format: format,
+                    metadata: metadata,
                     progress: progress, shouldCancel: shouldCancel, completion: completion
                 )
             } else {
                 offlineDocument?.exportPackets(
                     withIDs: identifiers, to: url, format: format,
+                    metadata: metadata,
                     progress: progress, shouldCancel: shouldCancel, completion: completion
                 )
             }
+        }
+
+        /// Upstream packetExportMetadata snapshot: user text styles + the
+        /// resolved comment (custom override, else the native packet
+        /// comment) for the requested ids. Non-plain styles and non-nil
+        /// comments only, mirroring the upstream dictionary contents.
+        func exportMetadata(for identifiers: Set<PacketSummary.ID>) -> PacketExportMetadata {
+            var styles: [PacketSummary.ID: PacketTextStyle] = [:]
+            var comments: [PacketSummary.ID: String] = [:]
+            styles.reserveCapacity(identifiers.count)
+            comments.reserveCapacity(identifiers.count)
+            for id in identifiers {
+                guard let packet = summary(for: id) else { continue }
+                let style = packet.resolvedTextStyle
+                if !style.isPlain {
+                    styles[id] = style
+                }
+                // Resolved comment: exports carry native pcapng comments too
+                // (upstream snapshots packet.resolvedComment verbatim).
+                if let comment = packet.resolvedComment {
+                    comments[id] = comment
+                }
+            }
+            return PacketExportMetadata(textStylesByPacketID: styles, commentsByPacketID: comments)
         }
 
         func activateDisplayFilter(
@@ -855,15 +882,7 @@ final class SourceManager: @unchecked Sendable {
         }
         guard !updates.isEmpty else { return }
 
-        // Bounded ring: keep at most 2000 batches / 100k ids.
-        source.updateSeq += 1
-        source.updateBatches.append((seq: source.updateSeq, ids: updates.map(\.packetID)))
-        var totalIDs = source.updateBatches.reduce(0) { $0 + $1.ids.count }
-        while source.updateBatches.count > 2_000 || totalIDs > 100_000 {
-            let evicted = source.updateBatches.removeFirst()
-            totalIDs -= evicted.ids.count
-            source.evictedUpdateSeq = evicted.seq
-        }
+        recordUpdateBatch(ids: updates.map(\.packetID), on: source)
     }
 
     private func indexOfSummary(id: UInt64, in source: Source) -> Int? {
@@ -1225,6 +1244,147 @@ final class SourceManager: @unchecked Sendable {
         return nil
     }
 
+    // MARK: - Packet annotations (highlight/strikethrough, comments)
+
+    /// Client-driven packet text styles and comments. Upstream applies these
+    /// in-process from the GUI; the port's daemon owns the summary buffers,
+    /// so the mutations arrive over IPC. Behavior mirrors upstream
+    /// PacketIngestState.applyTextStyleMutation / setCustomComment: only
+    /// indexed packet ids change, no-op packets are skipped, and changed ids
+    /// join the update ring like any late summary update.
+    func setPacketStyle(
+        sourceID: String?,
+        op: String,
+        color: String?,
+        packetIDs: [UInt64],
+        completion: @escaping (Result<[String: IPCValue], Error>) -> Void
+    ) {
+        queue.async {
+            guard let source = self.resolveSource(id: sourceID, completion: completion) else { return }
+            guard let mutation = Self.annotationMutation(op: op, color: color) else {
+                let names = PacketHighlightColor.allCases.map(\.rawValue).joined(separator: ", ")
+                return self.fail(
+                    IPCError.invalidParams,
+                    "op must be set_highlight (color: \(names)), toggle_strikethrough or reset",
+                    completion
+                )
+            }
+            let updated = self.applyStyle(mutation, packetIDs: packetIDs, on: source)
+            completion(.success(Self.annotationReplies(source: source, updated: updated)))
+        }
+    }
+
+    /// Upstream parity: comments are set or replaced; an empty sanitized
+    /// comment is a silent no-op (upstream v1 offers no comment removal —
+    /// the GUI sheet only submits non-empty text).
+    func setPacketComment(
+        sourceID: String?,
+        comment: String,
+        packetIDs: [UInt64],
+        completion: @escaping (Result<[String: IPCValue], Error>) -> Void
+    ) {
+        queue.async {
+            guard let source = self.resolveSource(id: sourceID, completion: completion) else { return }
+            let sanitized = PacketComment.sanitized(comment)
+            let updated: [UInt64]
+            if sanitized.isEmpty {
+                updated = []
+            } else {
+                updated = self.applyCustomComment(sanitized, packetIDs: packetIDs, on: source)
+            }
+            completion(.success(Self.annotationReplies(source: source, updated: updated)))
+        }
+    }
+
+    private static func annotationMutation(op: String, color: String?) -> PacketTextStyleMutation? {
+        switch op {
+        case "set_highlight":
+            guard let color else { return nil }
+            return PacketHighlightColor(rawValue: color).map(PacketTextStyleMutation.setHighlightColor)
+        case "toggle_strikethrough":
+            return .toggleStrikethrough
+        case "reset":
+            return .reset
+        default:
+            return nil
+        }
+    }
+
+    private static func annotationReplies(source: Source, updated: [UInt64]) -> [String: IPCValue] {
+        [
+            "source_id": .string(source.id),
+            "updated_count": .int(updated.count),
+            "updated_ids": .array(updated.map { .string(String($0)) }),
+        ]
+    }
+
+    /// Mirror of upstream PacketIngestState.applyTextStyleMutation. Update
+    /// only indexed packet ids so styling stays bounded for large captures;
+    /// per-packet idempotence (a repeated id or an equal style skips).
+    private func applyStyle(
+        _ mutation: PacketTextStyleMutation,
+        packetIDs: [UInt64],
+        on source: Source
+    ) -> [UInt64] {
+        var updatedIDs: [UInt64] = []
+        updatedIDs.reserveCapacity(packetIDs.count)
+        var seen = Set<UInt64>()
+        for packetID in packetIDs {
+            guard seen.insert(packetID).inserted,
+                  let index = indexOfSummary(id: packetID, in: source) else {
+                continue
+            }
+            let packet = source.summaries[index]
+            let updatedStyle = mutation.applying(to: packet.resolvedTextStyle)
+            guard updatedStyle != packet.resolvedTextStyle else { continue }
+            source.summaries[index] = packet.applying(textStyle: updatedStyle)
+            updatedIDs.append(packetID)
+        }
+        guard !updatedIDs.isEmpty else { return [] }
+        updatedIDs.sort()
+        recordUpdateBatch(ids: updatedIDs, on: source)
+        return updatedIDs
+    }
+
+    /// Mirror of upstream PacketIngestState.setCustomComment: writes the
+    /// sanitized override without scanning the full summary buffer.
+    private func applyCustomComment(
+        _ comment: String,
+        packetIDs: [UInt64],
+        on source: Source
+    ) -> [UInt64] {
+        var updatedIDs: [UInt64] = []
+        updatedIDs.reserveCapacity(packetIDs.count)
+        var seen = Set<UInt64>()
+        for packetID in packetIDs {
+            guard seen.insert(packetID).inserted,
+                  let index = indexOfSummary(id: packetID, in: source) else {
+                continue
+            }
+            let packet = source.summaries[index]
+            guard packet.customComment != comment else { continue }
+            source.summaries[index] = packet.applying(customComment: comment)
+            updatedIDs.append(packetID)
+        }
+        guard !updatedIDs.isEmpty else { return [] }
+        updatedIDs.sort()
+        recordUpdateBatch(ids: updatedIDs, on: source)
+        return updatedIDs
+    }
+
+    /// Bounded ring of late summary update batches (at most 2000 batches /
+    /// 100k ids) so clients can pull changed ids without re-listing.
+    private func recordUpdateBatch(ids: [UInt64], on source: Source) {
+        source.updateSeq += 1
+        source.updateBatches.append((seq: source.updateSeq, ids: ids))
+        var totalIDs = source.updateBatches.reduce(0) { $0 + $1.ids.count }
+        while source.updateBatches.count > 2_000 || totalIDs > 100_000 {
+            let evicted = source.updateBatches.removeFirst()
+            totalIDs -= evicted.ids.count
+            source.evictedUpdateSeq = evicted.seq
+        }
+    }
+
     func clearPackets(sourceID: String?, completion: @escaping (Result<Void, Error>) -> Void) {
         controlCapture(id: sourceID, action: "clear") { _ in
             completion(.success(()))
@@ -1346,11 +1506,18 @@ final class SourceManager: @unchecked Sendable {
                 return self.fail(IPCError.invalidParams, "no packets to export", completion)
             }
 
+            // Upstream packetExportMetadata: snapshot each packet's resolved
+            // user style + comment before the export leaves this queue, so
+            // the pcapng writer can stitch them into packet options.
+            let idsSet = Set(ids)
+            let metadata = source.exportMetadata(for: idsSet)
+
             let url = URL(fileURLWithPath: destination)
             source.exportPackets(
                 withIDs: ids,
                 to: url,
                 format: exportFormat,
+                metadata: metadata,
                 progress: nil,
                 shouldCancel: nil
             ) { result in
@@ -1439,12 +1606,71 @@ final class SourceManager: @unchecked Sendable {
                 document.save(to: url, format: .pcapng, completion: finish)
                 return
             }
-            // Live: full-capture pcapng export (documented v1 divergence —
-            // upstream's .tcpviewsession store format is macOS-app state).
+            // Live with a .tcpviewsession destination: snapshot the full
+            // capture, then ZIP the bundle (annotations ride the sidecar
+            // exactly like offline exports; the inner capture stays plain).
+            if destination.hasSuffix(".\(TCPViewSessionFormat.fileExtension)") {
+                let allIDs = source.summaries.map(\.id)
+                let stageURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("TCPViewSessionExport-\(UUID().uuidString).pcapng")
+                source.exportPackets(
+                    withIDs: allIDs,
+                    to: stageURL,
+                    format: .pcapng,
+                    metadata: .empty,
+                    progress: nil,
+                    shouldCancel: nil
+                ) { result in
+                    self.queue.async {
+                        switch result {
+                        case .failure(let error):
+                            try? FileManager.default.removeItem(at: stageURL)
+                            completion(.failure(error))
+                        case .success:
+                            let captureData = (try? Data(contentsOf: stageURL)) ?? Data()
+                            try? FileManager.default.removeItem(at: stageURL)
+                            do {
+                                try SessionPackage.writePackage(
+                                    packets: source.summaries,
+                                    captureFileData: captureData,
+                                    state: TCPViewSessionState(sourceMetadata: TCPViewSessionSourceMetadata(
+                                        fileName: source.interfaceID.map { "Capture on \($0)" },
+                                        filePath: nil,
+                                        format: CaptureFileFormat.pcapng.rawValue,
+                                        packetCount: source.summaries.count
+                                    )),
+                                    to: url
+                                )
+                                completion(.success([
+                                    "path": .string(destination),
+                                    "format": .string(TCPViewSessionFormat.fileExtension),
+                                    "packet_count": .int(source.summaries.count),
+                                    "bytes": .int((try? FileManager.default.attributesOfItem(atPath: destination)[.size] as? Int) ?? 0),
+                                ]))
+                            } catch {
+                                let message = (error as? TCPViewerCoreError)?.message ?? String(describing: error)
+                                completion(.failure(PayloadError(
+                                    code: IPCError.appCommandFailed,
+                                    message: message,
+                                    data: nil
+                                )))
+                            }
+                        }
+                    }
+                }
+                return
+            }
+            // Live with a plain capture destination: full-capture pcapng
+            // export (documented v1 divergence — upstream's .tcpviewsession
+            // store format is macOS-app state). Annotations ride along:
+            // resolved styles/comments snapshot all.
+            let allIDs = source.summaries.map(\.id)
+            let metadata = source.exportMetadata(for: Set(allIDs))
             source.exportPackets(
-                withIDs: source.summaries.map(\.id),
+                withIDs: allIDs,
                 to: url,
                 format: .pcapng,
+                metadata: metadata,
                 progress: nil,
                 shouldCancel: nil,
                 completion: finish

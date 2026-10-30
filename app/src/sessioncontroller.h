@@ -148,6 +148,20 @@ public:
     Q_INVOKABLE void clearPackets();
     Q_INVOKABLE void applyFilter(const QString &filter);
     Q_INVOKABLE void setQuickFilters(const QVariantList &quickFilters);
+
+    // Packet annotations (upstream row context menu): highlight color,
+    // strikethrough and the TCP Viewer comment. Single-row in C1 — bulk
+    // selection joins with the export slice. Includes the client-side
+    // sanitize mirror so the optimistic row matches the daemon's stored
+    // comment exactly.
+    Q_INVOKABLE void setPacketHighlightColor(const QString &packetID, const QString &colorName);
+    Q_INVOKABLE void togglePacketStrikethrough(const QString &packetID);
+    Q_INVOKABLE void resetPacketTextStyle(const QString &packetID);
+    Q_INVOKABLE void setPacketComment(const QString &packetID, const QString &comment);
+
+    void dispatchPacketAnnotation(const QString &packetID,
+                                  PacketListModel::AnnotationChange change,
+                                  const QString &command, QVariantMap params);
     // Sidebar Favorites: pin/unpin the current display-filter expression and
     // manage named filters. saveFilter returns "" on success or a user-facing
     // validation message (mirrors upstream PacketCustomFilterService).
@@ -199,6 +213,13 @@ signals:
 private:
     void handleConnectedChanged();
     void handleResponse(const QString &command, const QVariantMap &data);
+    // packets.list rides the request-id-aware signal so a response from a
+    // superseded stream rebuild (e.g. an import racing a capture.state event)
+    // is dropped instead of appended twice.
+    void handlePacketListResponse(const QString &command, const QString &requestID,
+                                  const QVariantMap &data);
+    void handleResponseRequestFailure(const QString &requestID, const QString &command,
+                                      const QString &code, const QString &message);
     void handleFailure(const QString &command, const QString &code, const QString &message);
     void handleEvent(const QString &name, const QVariantMap &data);
     void handlePackets(const QVariantMap &data);
@@ -253,6 +274,10 @@ private:
     quint64 m_lastPacketID = 0;
     qint64 m_lastPacketTimestamp = 0;
     QHash<QString, qint64> m_lastStreamTimestamp;
+    // Stream rebuild epoch: resetStream/selectSourceInternal bumps it; packet
+    // pages are accepted only when their fetch still belongs to this epoch.
+    qint64 m_streamEpoch = 0;
+    QHash<QString, qint64> m_pageEpoch;
     int m_pageSize = 5000;
     QStringList m_pendingOpenFiles;
     // Paths of the import chain in flight (multi-file progress display).

@@ -78,6 +78,14 @@ public struct IPCRequest: Codable, Equatable {
     public func bool(_ key: String) -> Bool? { params[key]?.boolValue }
     public func array(_ key: String) -> [IPCValue]? { params[key]?.arrayValue }
 
+    /// Present and not JSON null — distinguishes `"color": null` (clear) from
+    /// an absent key (leave alone). Runs entirely client-side here.
+    public func hasValue(_ key: String) -> Bool {
+        guard let value = params[key] else { return false }
+        if case .null = value { return false }
+        return true
+    }
+
     /// Security: request IDs are echoed back and logged — validate shape.
     public static func isValidRequestID(_ id: String) -> Bool {
         guard !id.isEmpty, id.count <= IPCLimits.maxRequestIDLength else { return false }

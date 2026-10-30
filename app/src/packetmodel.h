@@ -48,6 +48,8 @@ struct PacketRow {
     QString deltaTime;
     QString streamDeltaTime;
     QString comment;
+    QString highlightColor; // upstream PacketHighlightColor raw value ("")
+    bool strikethrough = false;
     qint64 timestampMs = 0;
     int length = 0;
     int originalLength = 0; // on-wire size; statistics use it, fallback mimics length
@@ -92,6 +94,8 @@ public:
         BundleIdentifierRole,
         CommentRole,
         TagsRole,
+        HighlightColorRole,
+        StrikethroughRole,
     };
     Q_ENUM(Role)
 
@@ -110,6 +114,29 @@ public:
     Q_INVOKABLE int rowForPacketID(const QString &packetID) const;
     Q_INVOKABLE int numberAt(int row) const;
     Q_INVOKABLE QString summaryAt(int row) const;
+    // Annotation readbacks for the row context menu (upstream reads the
+    // shared row store when building the Highlight/Strikethrough state).
+    Q_INVOKABLE QString highlightColorAt(int row) const;
+    Q_INVOKABLE bool strikethroughAt(int row) const;
+    Q_INVOKABLE QString commentAt(int row) const;
+
+    // Optimistic annotation write that mirrors the upstream in-place
+    // ingest-state mutation and the daemon's per-row semantics:
+    // - highlightColorChange: "" keeps each row's current color.
+    // - strikeToggle flips each row independently; styleReset clears both.
+    // - commentChange replaces the stored TCP Viewer comment (pre-sanitized
+    //   by the controller to mirror upstream PacketComment.sanitized).
+    // Returns the ids that actually changed.
+    struct AnnotationChange {
+        QString highlightColorChange;
+        bool hasHighlightChange = false;
+        bool strikeToggle = false;
+        bool styleReset = false;
+        QString commentChange;
+        bool hasCommentChange = false;
+    };
+    QVector<quint64> applyAnnotation(const QVector<quint64> &packetIDs,
+                                     const AnnotationChange &change);
     // Flat snapshot for derived models (endpoint statistics).
     Q_INVOKABLE QVariantList snapshotRows() const;
     Q_INVOKABLE const QString &protocolAt(int row) const;

@@ -209,6 +209,37 @@ final class CommandRouter: @unchecked Sendable {
                 respond(result.map { _ in ["cleared": .bool(true)] })
             }
 
+        case .packetsSetStyle:
+            do {
+                let ids = try request.requireBoundedPacketIDs("packet_ids", max: 5_000)
+                let op = try request.requireString("op")
+                let color = request.hasValue("color") ? try request.requireString("color") : nil
+                manager.setPacketStyle(
+                    sourceID: request.optionalString("source_id"),
+                    op: op,
+                    color: color,
+                    packetIDs: ids
+                ) { result in
+                    respond(result)
+                }
+            } catch {
+                respond(.failure(error))
+            }
+
+        case .packetsSetComment:
+            do {
+                let ids = try request.requireBoundedPacketIDs("packet_ids", max: 5_000)
+                manager.setPacketComment(
+                    sourceID: request.optionalString("source_id"),
+                    comment: request.string("comment") ?? "",
+                    packetIDs: ids
+                ) { result in
+                    respond(result)
+                }
+            } catch {
+                respond(.failure(error))
+            }
+
         case .streamPackets:
             do {
                 let streamID = try request.requireString("stream_id")
@@ -459,6 +490,15 @@ final class CommandRouter: @unchecked Sendable {
         if let comment = packet.resolvedComment {
             data["comment"] = .string(comment)
         }
+        // User text styles (upstream PacketHighlightColor + strikethrough).
+        // Plain styles stay absent; names match upstream's enum raw values.
+        let style = packet.resolvedTextStyle
+        if let highlight = style.highlightColor {
+            data["highlight_color"] = .string(highlight.rawValue)
+        }
+        if style.isStrikethrough {
+            data["strikethrough"] = .bool(true)
+        }
         if full {
             if !packet.layers.isEmpty {
                 data["layers"] = .array(packet.layers.map {
@@ -705,6 +745,26 @@ extension IPCRequest {
             } else {
                 throw SourceError(code: IPCError.invalidParams, message: "\(key) must contain decimal packet ids")
             }
+        }
+        return ids
+    }
+
+    /// Selection style: annotations apply to the client's row selection like
+    /// upstream context-menus, bounded by the same 5000-row export ceiling.
+    func requireBoundedPacketIDs(_ key: String, max: Int) throws -> [UInt64] {
+        let ids = try requirePacketIDArray(key)
+        guard ids.count <= max else {
+            throw SourceError(
+                code: IPCError.invalidParams,
+                message: "\(key) exceeds \(max) packet ids"
+            )
+        }
+        return ids
+    }
+
+    private func requirePacketIDArray(_ key: String) throws -> [UInt64] {
+        guard let ids = try optionalPacketIDArray(key), !ids.isEmpty else {
+            throw SourceError(code: IPCError.invalidParams, message: "missing param: \(key)")
         }
         return ids
     }

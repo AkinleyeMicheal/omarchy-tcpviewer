@@ -219,11 +219,18 @@ Item {
             }
             readonly property bool isSecondary: !isCustom && Theme.isSecondary(columnData.role)
             readonly property bool isSummary: !isCustom && columnData.role === "summary"
+            readonly property bool rowSelected: row === root.selectedIndex
+            // Upstream PacketHighlightPalette: a highlighted row fills the
+            // whole row (selected rows keep the selection paint over it).
+            readonly property string rowHighlight: String(model.highlightColor || "")
+            readonly property bool rowStrikethrough: model.strikethrough === true
 
             implicitHeight: Theme.packetRowHeight
-            color: row === root.selectedIndex
+            color: rowSelected
                 ? Qt.rgba(Theme.selection.r, Theme.selection.g, Theme.selection.b, 0.18)
-                : (row % 2 === 1 ? Theme.rowAlternate : "transparent")
+                : (rowHighlight !== ""
+                    ? Theme.highlightRowColor(rowHighlight)
+                    : (row % 2 === 1 ? Theme.rowAlternate : "transparent"))
 
             Rectangle {
                 visible: cell.isProtocol
@@ -259,6 +266,7 @@ Item {
                     : (cell.isSecondary ? Theme.secondaryLabel : Theme.label)
                 font.family: Theme.monoFont
                 font.pixelSize: Theme.packetFontSize
+                font.strikeout: cell.rowStrikethrough
             }
 
             MouseArea {

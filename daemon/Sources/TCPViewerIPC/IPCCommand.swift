@@ -40,6 +40,18 @@ public enum IPCCommand: String, Codable, CaseIterable {
     case packetsBytes = "packets.bytes"
     case packetsClear = "packets.clear"
 
+    /// New in our schema: packet text-style mutations (highlight color,
+    /// strikethrough). Upstream applies these in-process from the GUI; the
+    /// port's daemon owns the packet buffers, so the client needs commands.
+    /// `op`: set_highlight (with `color`: name) | toggle_strikethrough | reset.
+    case packetsSetStyle = "packets.set_style"
+
+    /// New in our schema: set or replace the TCP Viewer comment on the
+    /// indexed packets. `comment` is sanitized like upstream (CR/CRLF → LF,
+    /// trimmed, first 1000 chars); an empty sanitized comment is a silent
+    /// no-op — upstream v1 offers no comment removal.
+    case packetsSetComment = "packets.set_comment"
+
     case streamPackets = "stream.packets"
     case streamFollow = "stream.follow"
 

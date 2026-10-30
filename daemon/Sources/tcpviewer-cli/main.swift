@@ -34,6 +34,7 @@ let twoWordCommands: Set<String> = [
     "capture.start", "capture.pause", "capture.resume", "capture.stop", "capture.status", "capture.overview",
     "interfaces.list", "sources.list", "source.close",
     "packets.list", "packets.summary", "packets.details", "packets.bytes", "packets.clear",
+    "packets.set_style", "packets.set_comment",
     "stream.packets", "stream.follow",
     "file.import", "file.export", "file.export_session",
     "app.status",
@@ -72,6 +73,10 @@ func usage() -> Never {
       packets details PACKET_ID [--max-depth N] [--max-nodes N]
       packets bytes PACKET_ID [--offset N] [--length N] [--encoding hex|base64]
       packets clear --yes
+      packets set-style --ids ID,... --op set_highlight --color red|orange|yellow|green|teal|blue|indigo|purple|pink|brown|gray
+                                            [--source-id ID]
+      packets set-style --ids ID,... --op toggle_strikethrough | reset
+      packets set-comment --ids ID,... --comment TEXT [--source-id ID]
       stream packets STREAM_ID [QUERY OPTIONS]
       stream follow PACKET_ID [--direction both|client-to-server|server-to-client]
                              [--encoding text|hex|base64]
@@ -179,8 +184,15 @@ func wireValue(_ text: String) -> IPCValue {
 }
 
 func buildRequest(args: CLIArguments) -> IPCRequest {
-    guard let command = IPCCommand(rawValue: args.commandPath.joined(separator: ".")) else {
-        fail("unknown command: \(args.commandPath.joined(separator: " ")) (try --help)", code: 2)
+    let joined = args.commandPath.joined(separator: ".")
+    // Two-word verbs may be typed with a hyphen ("packets set-style"):
+    // canonicalize the trailing segment to "_" before the lookup.
+    var parts = args.commandPath
+    let last = parts.removeLast().replacingOccurrences(of: "-", with: "_")
+    parts.append(last)
+    guard let command = IPCCommand(rawValue: joined)
+        ?? IPCCommand(rawValue: parts.joined(separator: ".")) else {
+        fail("unknown command: \(joined) (try --help)", code: 2)
     }
 
     var params: [String: IPCValue] = [:]
@@ -206,6 +218,15 @@ func buildRequest(args: CLIArguments) -> IPCRequest {
 
     for (key, raw) in args.flags {
         params[key.replacingOccurrences(of: "-", with: "_")] = wireValue(raw)
+    }
+
+    // Annotation selection: --ids 12,34,56 → packet_ids array (a comma list;
+    // a bare single id also wraps into the array).
+    if command == .packetsSetStyle || command == .packetsSetComment,
+       let ids = args.flags["ids"] {
+        let value = wireValue(ids)
+        params["packet_ids"] = .array(value.arrayValue ?? [value])
+        params.removeValue(forKey: "ids")
     }
 
     let timeout = longRunningCommands.contains(command.rawValue) ? max(args.timeoutSeconds, 300) : args.timeoutSeconds

@@ -69,6 +69,10 @@ SessionController::SessionController(QObject *parent)
 
     connect(m_client, &DaemonClient::connectedChanged, this, &SessionController::handleConnectedChanged);
     connect(m_client, &DaemonClient::response, this, &SessionController::handleResponse);
+    connect(m_client, &DaemonClient::responseObject,
+            this, &SessionController::handlePacketListResponse);
+    connect(m_client, &DaemonClient::requestFailure,
+            this, &SessionController::handleResponseRequestFailure);
     connect(m_client, &DaemonClient::failure, this, &SessionController::handleFailure);
     connect(m_client, &DaemonClient::event, this, &SessionController::handleEvent);
     connect(m_sourceTree, &SourceTreeModel::countChanged,
@@ -404,6 +408,84 @@ void SessionController::clearPackets()
                     {QStringLiteral("yes"), true}});
 }
 
+// MARK: - Packet annotations
+
+void SessionController::setPacketHighlightColor(const QString &packetID, const QString &colorName)
+{
+    if (colorName.isEmpty())
+        return;
+    PacketListModel::AnnotationChange change;
+    change.hasHighlightChange = true;
+    change.highlightColorChange = colorName;
+    dispatchPacketAnnotation(packetID, change,
+                             QStringLiteral("packets.set_style"),
+                             {{"op", QStringLiteral("set_highlight")},
+                              {"color", colorName}});
+}
+
+void SessionController::togglePacketStrikethrough(const QString &packetID)
+{
+    PacketListModel::AnnotationChange change;
+    change.strikeToggle = true;
+    dispatchPacketAnnotation(packetID, change,
+                             QStringLiteral("packets.set_style"),
+                             {{"op", QStringLiteral("toggle_strikethrough")}});
+}
+
+void SessionController::resetPacketTextStyle(const QString &packetID)
+{
+    PacketListModel::AnnotationChange change;
+    change.styleReset = true;
+    dispatchPacketAnnotation(packetID, change,
+                             QStringLiteral("packets.set_style"),
+                             {{"op", QStringLiteral("reset")}});
+}
+
+void SessionController::setPacketComment(const QString &packetID, const QString &comment)
+{
+    // Client mirror of upstream PacketComment.sanitized: CRLF → LF, trim,
+    // cap at 1000 characters. Empty stays a no-op (upstream v1 offers no
+    // comment removal — the sheet only submits non-empty text).
+    QString normalized = comment;
+    normalized.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+    normalized.replace(QLatin1Char('\r'), QLatin1Char('\n'));
+    normalized = normalized.trimmed();
+    if (normalized.size() > 1000)
+        normalized = normalized.left(1000).trimmed();
+    if (normalized.isEmpty())
+        return;
+
+    PacketListModel::AnnotationChange change;
+    change.hasCommentChange = true;
+    change.commentChange = normalized;
+    dispatchPacketAnnotation(packetID, change,
+                             QStringLiteral("packets.set_comment"),
+                             {{"comment", normalized}});
+}
+
+void SessionController::dispatchPacketAnnotation(
+    const QString &packetID, PacketListModel::AnnotationChange change,
+    const QString &command, QVariantMap params)
+{
+    bool ok = false;
+    const quint64 id = packetID.toULongLong(&ok);
+    if (!ok || id == 0)
+        return;
+
+    // Upstream mutates its ingest state synchronously; the model mirror
+    // gives the same zero-latency row feedback (the reply path only
+    // handles failures).
+    PacketListModel::AnnotationChange applied = change;
+    m_packets->applyAnnotation({id}, applied);
+
+    if (!m_client->connected() || m_currentSourceID.isEmpty())
+        return;
+    params.insert(QStringLiteral("source_id"), m_currentSourceID);
+    params.insert(QStringLiteral("packet_ids"), QVariantList{packetID});
+    m_client->send(command, params);
+}
+
+
 void SessionController::applyFilter(const QString &filter)
 {
     if (filter == m_filterText) {
@@ -589,7 +671,8 @@ void SessionController::clearSelection()
 void SessionController::resetStream()
 {
     // The table is rebuilt from the daemon, so the local tree scope starts over.
-    m_packets->clearTreeFilter();
+    m_streamEpoch++;
+    m_pageEpoch.clear();
     m_sourceTree->reset();
     m_packets->clear();
     m_treeSelectApplied = false;
@@ -627,7 +710,32 @@ void SessionController::requestPackets(bool firstPage)
     }
 
     m_requestInFlight = true;
-    m_client->send(QStringLiteral("packets.list"), params, 120);
+    const QString requestID = m_client->send(QStringLiteral("packets.list"), params, 120);
+    if (!requestID.isEmpty())
+        m_pageEpoch.insert(requestID, m_streamEpoch);
+}
+
+void SessionController::handlePacketListResponse(const QString &command,
+                                                 const QString &requestID,
+                                                 const QVariantMap &data)
+{
+    if (command != QStringLiteral("packets.list"))
+        return;
+    const qint64 sentEpoch = m_pageEpoch.take(requestID);
+    if (sentEpoch != m_streamEpoch)
+        return;
+    handlePackets(data);
+}
+
+void SessionController::handleResponseRequestFailure(const QString &requestID,
+                                                     const QString &command,
+                                                     const QString &code,
+                                                     const QString &message)
+{
+    if (command == QStringLiteral("packets.list"))
+        m_pageEpoch.remove(requestID);
+    Q_UNUSED(code)
+    Q_UNUSED(message)
 }
 
 void SessionController::handleResponse(const QString &command, const QVariantMap &data)
@@ -743,10 +851,7 @@ void SessionController::handleResponse(const QString &command, const QVariantMap
         return;
     }
 
-    if (command == QStringLiteral("packets.list")) {
-        handlePackets(data);
-        return;
-    }
+    // packets.list pages arrive via handlePacketListResponse(requestID, ...).
 
     if (command == QStringLiteral("file.import")) {
         const QVariantList imported = data.value(QStringLiteral("imported")).toList();
@@ -875,6 +980,15 @@ void SessionController::handleFailure(const QString &command, const QString &cod
         return;
     }
 
+    // Annotation mutations are optimistic; a failure (unknown id, bad op)
+    // re-lists the stream so client rows re-align with the daemon buffers.
+    if (command == QStringLiteral("packets.set_style")
+        || command == QStringLiteral("packets.set_comment")) {
+        resetStream();
+        setError(message);
+        return;
+    }
+
     // Inspector failures stay scoped to the inspector; the table keeps working.
     setLoading(false);
     setError(message);
@@ -888,10 +1002,11 @@ void SessionController::handleEvent(const QString &name, const QVariantMap &data
     }
     if (name == QStringLiteral("capture.state") || name == QStringLiteral("capture.health")) {
         const QString sourceID = data.value(QStringLiteral("source_id")).toString();
-        if (sourceID == m_currentSourceID)
+        if (sourceID == m_currentSourceID) {
             setStatus(data);
-        else if (m_currentSourceID.isEmpty() && !sourceID.isEmpty())
+        } else if (m_currentSourceID.isEmpty() && !sourceID.isEmpty()) {
             selectSourceInternal(sourceID);
+        }
         return;
     }
 }
@@ -1151,6 +1266,8 @@ PacketRow SessionController::parseSummary(const QVariantMap &summary)
         : 0;
     row.sourceKind = summary.value(QStringLiteral("source_kind")).toString();
     row.comment = summary.value(QStringLiteral("comment")).toString();
+    row.highlightColor = summary.value(QStringLiteral("highlight_color")).toString();
+    row.strikethrough = summary.value(QStringLiteral("strikethrough")).toBool();
     row.length = summary.value(QStringLiteral("length")).toInt();
     row.originalLength = summary.value(QStringLiteral("original_length")).toInt();
     row.tcpPayloadLength = summary.value(QStringLiteral("tcp_payload_length")).toInt();

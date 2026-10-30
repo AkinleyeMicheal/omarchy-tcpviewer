@@ -194,7 +194,9 @@ void DaemonClient::handleLine(const QByteArray &line)
         pending.command.isEmpty() ? requestID : pending.command);
 
     if (object.value(QStringLiteral("ok")).toBool()) {
-        emit response(command, object.value(QStringLiteral("data")).toObject().toVariantMap());
+        const QVariantMap data = object.value(QStringLiteral("data")).toObject().toVariantMap();
+        emit response(command, data);
+        emit responseObject(command, requestID, data);
         return;
     }
 

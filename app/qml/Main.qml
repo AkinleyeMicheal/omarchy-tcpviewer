@@ -815,6 +815,14 @@ ApplicationWindow {
         property int pendingRow: -1
         property string pendingProtocol: ""
 
+        // Annotation state of the pending row; empty when no row context exists.
+        readonly property string pendingPacketID: pendingRow >= 0
+            ? String(session.packets.packetIDAt(pendingRow)) : ""
+        readonly property string pendingComment: pendingRow >= 0
+            ? String(session.packets.commentAt(pendingRow)) : ""
+        readonly property bool annotationEnabled: pendingPacketID !== ""
+            && session.currentSourceID !== "" && !session.loading
+
         function openFor(index, globalX, globalY) {
             pendingRow = index
             pendingProtocol = String(session.packets.protocolAt(index)).toUpperCase()
@@ -836,6 +844,158 @@ ApplicationWindow {
                 diff.addPacket(session.currentSourceID, session.packets.packetIDAt(row),
                                session.packets.numberAt(row), session.packets.summaryAt(row))
                 diffWindow.openAndRaise()
+            }
+        }
+
+        MenuSeparator {
+            visible: rowContextMenu.annotationEnabled
+        }
+
+        // Upstream row menu: "Add Comment…" opens the comment sheet (single
+        // target in C1; bulk checks land with the export slice).
+        MenuItem {
+            text: rowContextMenu.pendingComment !== "" ? "Edit Comment…" : "Add Comment…"
+            enabled: rowContextMenu.annotationEnabled
+            onTriggered: packetCommentSheet.openFor(
+                rowContextMenu.pendingPacketID, rowContextMenu.pendingComment)
+        }
+
+        // Upstream Highlight submenu: 11 colors, then Strikethrough + Reset.
+        Menu {
+            id: highlightMenu
+            title: "Highlight"
+            enabled: rowContextMenu.annotationEnabled
+
+            function capitalize(name) {
+                return name.charAt(0).toUpperCase() + name.slice(1)
+            }
+
+            Repeater {
+                model: Theme.highlightOrder
+                delegate: MenuItem {
+                    required property var modelData
+                    text: highlightMenu.capitalize(modelData)
+                    onTriggered: session.setPacketHighlightColor(
+                        rowContextMenu.pendingPacketID, modelData)
+                }
+            }
+
+            MenuSeparator {}
+
+            MenuItem {
+                text: "Strikethrough"
+                checkable: true
+                checked: rowContextMenu.pendingRow >= 0
+                    && session.packets.strikethroughAt(rowContextMenu.pendingRow)
+                onTriggered: session.togglePacketStrikethrough(
+                    rowContextMenu.pendingPacketID)
+            }
+
+            MenuItem {
+                text: "Reset"
+                enabled: rowContextMenu.pendingRow >= 0
+                    && (session.packets.strikethroughAt(rowContextMenu.pendingRow)
+                        || session.packets.highlightColorAt(rowContextMenu.pendingRow) !== "")
+                onTriggered: session.resetPacketTextStyle(rowContextMenu.pendingPacketID)
+            }
+        }
+    }
+
+    // Packet comment sheet (upstream PacketCommentSheetViewController) — a
+    // small popup with one text field; blank submissions are no-ops like
+    // upstream's sanitized-comment guard.
+    Popup {
+        id: packetCommentSheet
+        property string pendingPacketID: ""
+        property string initialComment: ""
+
+        function openFor(packetID, comment) {
+            pendingPacketID = packetID
+            initialComment = comment
+            commentField.text = comment
+            open()
+            commentField.forceActiveFocus()
+        }
+
+        function save() {
+            const text = commentField.text
+            if (String(text).trim() !== "")
+                session.setPacketComment(pendingPacketID, String(text))
+            close()
+        }
+
+        width: 420
+        anchors.centerIn: Overlay.overlay
+        modal: true
+        closePolicy: Popup.CloseOnEscape
+
+        background: Rectangle {
+            color: Theme.contentBackground
+            radius: 10
+            border.color: Theme.separator
+        }
+
+    contentItem: ColumnLayout {
+            id: sheetColumn
+            spacing: 10
+
+            Label {
+                text: packetCommentSheet.initialComment !== "" ? "Edit Comment" : "Add Comment"
+                font.family: Theme.uiFont
+                font.pixelSize: 14
+                font.weight: Font.DemiBold
+                color: Theme.label
+            }
+
+            Label {
+                text: "Add a note for this packet."
+                font.family: Theme.uiFont
+                font.pixelSize: Theme.uiSize
+                color: Theme.secondaryLabel
+            }
+
+            ScrollView {
+                id: commentScroll
+                Layout.fillWidth: true
+                Layout.preferredHeight: 96
+                clip: true
+
+                TextArea {
+                    id: commentField
+                    wrapMode: TextArea.Wrap
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.uiSize
+                    color: Theme.label
+                    selectByMouse: true
+                    placeholderText: "TCP Viewer comment"
+                    background: Rectangle {
+                        border.color: Theme.separator
+                        radius: 6
+                        color: Theme.dark ? "#1e1e1e" : "#f7f7f7"
+                    }
+                    Keys.onReturnPressed: (event) => {
+                        if (event.modifiers & Qt.ShiftModifier)
+                            return
+                        packetCommentSheet.save()
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                spacing: 8
+
+                Button {
+                    text: "Cancel"
+                    onClicked: packetCommentSheet.close()
+                }
+
+                Button {
+                    text: "Save"
+                    highlighted: true
+                    enabled: String(commentField.text).trim() !== ""
+                    onClicked: packetCommentSheet.save()
+                }
             }
         }
     }

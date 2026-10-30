@@ -2,6 +2,8 @@
 
 #include <QVariantMap>
 
+#include <algorithm>
+
 PacketListModel::PacketListModel(QObject *parent)
     : QAbstractTableModel(parent)
 {
@@ -92,6 +94,10 @@ QVariant PacketListModel::data(const QModelIndex &index, int role) const
         return row.comment;
     case TagsRole:
         return QString();
+    case HighlightColorRole:
+        return row.highlightColor;
+    case StrikethroughRole:
+        return row.strikethrough;
     default:
         return {};
     }
@@ -127,6 +133,8 @@ QHash<int, QByteArray> PacketListModel::roleNames() const
         {BundleIdentifierRole, "bundleIdentifier"},
         {CommentRole, "comment"},
         {TagsRole, "tags"},
+        {HighlightColorRole, "highlightColor"},
+        {StrikethroughRole, "strikethrough"},
     };
 }
 
@@ -320,6 +328,76 @@ const QString &PacketListModel::protocolAt(int row) const
     if (source < 0)
         return empty;
     return m_rows.at(source).protocol;
+}
+
+QString PacketListModel::highlightColorAt(int row) const
+{
+    const int source = sourceRow(row);
+    return source >= 0 ? m_rows.at(source).highlightColor : QString();
+}
+
+bool PacketListModel::strikethroughAt(int row) const
+{
+    const int source = sourceRow(row);
+    return source >= 0 && m_rows.at(source).strikethrough;
+}
+
+QString PacketListModel::commentAt(int row) const
+{
+    const int source = sourceRow(row);
+    return source >= 0 ? m_rows.at(source).comment : QString();
+}
+
+QVector<quint64> PacketListModel::applyAnnotation(
+    const QVector<quint64> &packetIDs, const AnnotationChange &change)
+{
+    QVector<quint64> changed;
+    QSet<quint64> seen;
+    changed.reserve(packetIDs.size());
+    seen.reserve(packetIDs.size());
+    for (int row = 0; row < m_rows.size(); ++row) {
+        const quint64 id = m_rows.at(row).number;
+        if (id == 0 || !packetIDs.contains(id) || seen.contains(id))
+            continue;
+        seen.insert(id);
+
+        PacketRow &row_data = m_rows[row];
+        bool touched = false;
+        if (change.styleReset) {
+            if (!row_data.highlightColor.isEmpty() || row_data.strikethrough) {
+                row_data.highlightColor = QString();
+                row_data.strikethrough = false;
+                touched = true;
+            }
+        } else {
+            if (change.hasHighlightChange
+                && row_data.highlightColor != change.highlightColorChange) {
+                row_data.highlightColor = change.highlightColorChange;
+                touched = true;
+            }
+            if (change.strikeToggle) {
+                row_data.strikethrough = !row_data.strikethrough;
+                touched = true;
+            }
+        }
+        if (change.hasCommentChange && row_data.comment != change.commentChange) {
+            row_data.comment = change.commentChange;
+            touched = true;
+        }
+        if (touched)
+            changed.append(id);
+    }
+    // The mutation only persists for rows present in the model (the same
+    // bounded rule as upstream's indexed mutation). Unknown ids are dropped.
+    if (changed.isEmpty())
+        return changed;
+
+    // Sorted matches the daemon's updated_ids contract; `seen` kept them
+    // unique.
+    std::sort(changed.begin(), changed.end());
+    emit dataChanged(index(0, 0),
+                     index(static_cast<int>(m_rows.size()) - 1, columnCount() - 1));
+    return changed;
 }
 
 void PacketListModel::appendRows(const QVector<PacketRow> &rows)

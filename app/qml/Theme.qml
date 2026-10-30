@@ -49,6 +49,48 @@ QtObject {
         return colors[Math.abs(Number(index) || 0) % colors.length]
     }
 
+    // Packet row highlight palette. Names are upstream PacketHighlightColor
+    // raw values; the shade hexes are the upstream menu/sidecar colors. The
+    // row fill blends the cell background toward the shade the way the
+    // upstream PacketHighlightPalette does (22% light / 32% dark).
+    readonly property var highlightOrder: [
+        "red", "orange", "yellow", "green", "teal", "blue",
+        "indigo", "purple", "pink", "brown", "gray"
+    ]
+    readonly property var highlightShades: ({
+        red: dark ? "#ff453a" : "#ff3b30",
+        orange: dark ? "#ff9f0a" : "#ff9500",
+        yellow: dark ? "#ffd60a" : "#ffcc00",
+        green: dark ? "#30d158" : "#34c759",
+        teal: dark ? "#40c8e0" : "#30b0c7",
+        blue: dark ? "#0a84ff" : "#007aff",
+        indigo: dark ? "#5e5ce6" : "#5856d6",
+        purple: dark ? "#bf5af2" : "#af52de",
+        pink: dark ? "#ff375f" : "#ff2d55",
+        brown: dark ? "#ac8e68" : "#a2845e",
+        gray: "#8e8e93"
+    })
+
+    function highlightShade(name) {
+        var shade = theme.highlightShades[String(name)]
+        return shade ? shade : ""
+    }
+
+    function highlightRowColor(name) {
+        var shade = theme.highlightShade(name)
+        if (String(shade) === "")
+            return ""
+        var c = Qt.color(shade)
+        var fraction = theme.dark ? 0.32 : 0.22
+        // controlBackground seal: blend the row base toward the shade.
+        var base = theme.dark ? Qt.color("#252525") : Qt.color("#ffffff")
+        return Qt.rgba(
+            base.r * (1 - fraction) + c.r * fraction,
+            base.g * (1 - fraction) + c.g * fraction,
+            base.b * (1 - fraction) + c.b * fraction,
+            1)
+    }
+
     // Typography (SF Pro -> Inter, SF Mono -> JetBrainsMono Nerd Font).
     readonly property string uiFont: "Inter"
     readonly property string monoFont: "JetBrainsMono Nerd Font"
