@@ -61,6 +61,9 @@ public:
     void rebuildNow();
 
     Q_INVOKABLE void selectNode(const QString &nodeId);
+    // Deselect back to the unfiltered "all" root without touching any
+    // filter: pinned-source selections live outside the tree.
+    Q_INVOKABLE void clearNodeSelection();
     Q_INVOKABLE void toggleExpanded(const QString &nodeId);
     PacketTreeFilter filterForNode(const QString &nodeId) const;
 

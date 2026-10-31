@@ -460,6 +460,18 @@ void SourceTreeModel::selectNode(const QString &nodeId)
     emit selectedNodeIdChanged();
 }
 
+void SourceTreeModel::clearNodeSelection()
+{
+    // C2 saved workspace: an app-fed pseudo-source owns the table, so the
+    // tree shows no highlighted scope at all (a real source switch resets
+    // through reset() back to "all").
+    if (m_selectedNodeId.isEmpty())
+        return;
+    m_selectedNodeId.clear();
+    rebuildNow();
+    emit selectedNodeIdChanged();
+}
+
 void SourceTreeModel::toggleExpanded(const QString &nodeId)
 {
     const int index = m_nodeIndexById.value(nodeId, -1);

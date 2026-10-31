@@ -52,17 +52,20 @@ final class SessionPackageTests: XCTestCase {
 
     private func writeBundle(
         packets: [PacketSummary],
+        pins: [SessionPinRecord] = [],
         to url: URL
     ) throws {
+        var state = TCPViewSessionState(sourceMetadata: TCPViewSessionSourceMetadata(
+            fileName: "sample.pcapng",
+            filePath: "/tmp/sample.pcapng",
+            format: "pcapng",
+            packetCount: packets.count
+        ))
+        state.pins = pins
         try SessionPackage.writePackage(
             packets: packets,
             captureFileData: Data("synthetic-capture-bytes".utf8),
-            state: TCPViewSessionState(sourceMetadata: TCPViewSessionSourceMetadata(
-                fileName: "sample.pcapng",
-                filePath: "/tmp/sample.pcapng",
-                format: "pcapng",
-                packetCount: packets.count
-            )),
+            state: state,
             to: url
         )
     }
@@ -93,6 +96,51 @@ final class SessionPackageTests: XCTestCase {
         XCTAssertEqual(contents.packets.last?.textStyle?.highlightColor, .blue)
         XCTAssertEqual(contents.captureFileURL.lastPathComponent, "capture.pcapng")
         XCTAssertTrue(FileManager.default.fileExists(atPath: contents.captureFileURL.path))
+    }
+
+    func testPinRecordsRoundTripThroughStateJSON() throws {
+        // C2: pins ride state.json like upstream's document-scoped PacketPin
+        // list — decode keeps the fields (placeholders lost them) and the
+        // package re-encodes them byte-compatibly for re-export.
+        let url = temporaryFileURL("pins-bundle.tcpviewsession")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let pins = [
+            SessionPinRecord(
+                id: "domain:example.com", kind: "domain", title: "example.com",
+                createdAt: Date(timeIntervalSince1970: 1_760_000_000), domain: "example.com"),
+            SessionPinRecord(
+                id: "ip:10.0.0.1", kind: "ip", title: "10.0.0.1",
+                createdAt: Date(timeIntervalSince1970: 1_760_000_100), ipAddress: "10.0.0.1"),
+            SessionPinRecord(
+                id: "client:/usr/bin/curl", kind: "client", title: "curl",
+                createdAt: Date(timeIntervalSince1970: 1_760_000_200),
+                clientKey: "/usr/bin/curl", clientDisplayName: "curl"),
+        ]
+        try writeBundle(packets: [makePacket(id: 1)], pins: pins, to: url)
+
+        let contents = try SessionPackage.loadPackage(at: url)
+        defer { try? FileManager.default.removeItem(at: contents.extractionDirectoryURL) }
+        XCTAssertEqual(contents.state.pins, pins)
+        XCTAssertEqual(contents.state.pins.first?.domain, "example.com")
+        XCTAssertEqual(contents.state.pins[1].ipAddress, "10.0.0.1")
+        XCTAssertEqual(contents.state.pins.last?.clientKey, "/usr/bin/curl")
+    }
+
+    func testSessionPinKeepsUpstreamCamelCaseKeys() throws {
+        // The session JSON is upstream-interchange: PacketPin fields encode
+        // camelCase with an iso8601 createdAt, same as the macOS app.
+        let pin = SessionPinRecord(
+            id: "domain:example.com", kind: "domain", title: "example.com",
+            createdAt: Date(timeIntervalSince1970: 1_760_000_000), domain: "example.com")
+        let data = try TCPViewerSession.TCPViewSessionCodec.encodeJSON([pin])
+        let payload = String(decoding: data, as: UTF8.self)
+        XCTAssertTrue(payload.contains("\"id\""), payload)
+        XCTAssertTrue(payload.contains("\"createdAt\""), payload)
+        XCTAssertTrue(payload.contains("\"domain\""), payload)
+        let decoded = try TCPViewSessionCodec
+            .decodeJSON([SessionPinRecord].self, from: data)
+        XCTAssertEqual(decoded, [pin])
     }
 
     func testWrongMagicIsRejected() throws {

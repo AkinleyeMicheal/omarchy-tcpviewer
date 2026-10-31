@@ -57,6 +57,11 @@ struct PacketRow {
     int severity = 0; // 0 normal, 1 warning (orange summary)
 };
 
+// Full-row persistence shape (saved packets): unlike snapshotRows' display
+// subset, these maps round-trip every PacketRow field.
+QVariantMap packetRowToMap(const PacketRow &row);
+PacketRow packetRowFromMap(const QVariantMap &map);
+
 class PacketListModel : public QAbstractTableModel
 {
     Q_OBJECT
@@ -64,6 +69,9 @@ class PacketListModel : public QAbstractTableModel
     Q_PROPERTY(int count READ count NOTIFY countChanged)
     Q_PROPERTY(int totalCount READ totalCount NOTIFY countChanged)
     Q_PROPERTY(bool treeFilterActive READ treeFilterActive NOTIFY treeFilterChanged)
+    // Bumped on every row-set mutation (clear/append/load). QML bindings for
+    // derived values that C++ computes on demand (pin counts) re-run off it.
+    Q_PROPERTY(int revision READ revision NOTIFY revisionChanged)
 
 public:
     enum Role {
@@ -139,6 +147,22 @@ public:
                                      const AnnotationChange &change);
     // Flat snapshot for derived models (endpoint statistics).
     Q_INVOKABLE QVariantList snapshotRows() const;
+    // Client-key readback for the row menu's Pin action (upstream pins the
+    // selected app identity; disabled when a row has no client).
+    Q_INVOKABLE const QString &clientKeyAt(int row) const;
+    // Display name of the row's client (Pin menu title).
+    Q_INVOKABLE QString clientNameAt(int row) const;
+    // Full-row snapshot (saved packets): the persistence shape of
+    // packetRowToMap for one visible row.
+    Q_INVOKABLE QVariantMap rowSnapshotAt(int row) const;
+    // Pinned-source counts (upstream shows per-pin packet counts from its
+    // source-list assignments): count rows whose keys match a kind/filter,
+    // mirroring the tree's appKey/domain/ip scope. Kind is "domain"/"ip"/
+    // "client"; key is the domain name, IP address, or client key.
+    Q_INVOKABLE int countForPin(const QString &kind, const QString &key) const;
+    // Replace the whole table from serialized rows (Saved workspace):
+    // saved records render as normal rows, no daemon backing.
+    Q_INVOKABLE void loadRows(const QVariantList &rows);
     Q_INVOKABLE const QString &protocolAt(int row) const;
     // Sidebar scope filter. Empty keys mean "any"; missingDomain selects the
     // upstream "IP Addresses" pseudo-domain. IP matches only no-domain packets.
@@ -152,12 +176,14 @@ public:
 
     int count() const { return visibleRowCount(); }
     int totalCount() const { return m_rows.size(); }
+    int revision() const { return m_revision; }
     bool treeFilterActive() const { return m_treeFilterActive; }
     quint64 lastPacketID() const { return m_lastPacketID; }
 
 signals:
     void countChanged();
     void treeFilterChanged();
+    void revisionChanged();
 
 private:
     int visibleRowCount() const;
@@ -166,6 +192,7 @@ private:
     void rebuildVisibleRows();
 
     QVector<PacketRow> m_rows;
+    int m_revision = 0;
     QVector<int> m_visibleRows;
     quint64 m_lastPacketID = 0;
     int m_columnCount = 1;

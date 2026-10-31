@@ -4,6 +4,8 @@
 #include "packetcolumnlayout.h"
 #include "packetcustomcolumns.h"
 #include "packetmodel.h"
+#include "pinstore.h"
+#include "savedpacketstore.h"
 #include "sourcetreemodel.h"
 
 #include <QByteArray>
@@ -64,6 +66,15 @@ class SessionController : public QObject
     // to the overview card layout.
     Q_PROPERTY(QStringList pinnedFilters READ pinnedFilters NOTIFY filtersChanged)
     Q_PROPERTY(QVariantList savedFilters READ savedFilters NOTIFY filtersChanged)
+    // Pinned sources (upstream PacketPinService): "Favorites > Pinned" items
+    // for domains/IPs/clients. Session-document sources carry their own pins
+    // while open (document-scoped rule) and replace the persistent list.
+    Q_PROPERTY(QVariantList pinnedItems READ pinnedItems NOTIFY pinsChanged)
+    Q_PROPERTY(QString selectedPinID READ selectedPinID NOTIFY pinsChanged)
+    // Saved packets (upstream SavedPacketService): starred rows shown as their
+    // own workspace under "Favorites > Saved".
+    Q_PROPERTY(bool savedMode READ savedMode NOTIFY savedModeChanged)
+    Q_PROPERTY(int savedCount READ savedCount NOTIFY savedPacketsChanged)
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorTextChanged)
     Q_PROPERTY(bool loading READ loading NOTIFY loadingChanged)
     // True while an import chain is in flight (gates the Cancel button).
@@ -113,6 +124,10 @@ public:
     QStringList quickFilters() const { return m_quickFilters; }
     QStringList pinnedFilters() const { return m_pinnedFilters; }
     QVariantList savedFilters() const { return m_savedFilters; }
+    QVariantList pinnedItems() const;
+    QString selectedPinID() const { return m_selectedPinID; }
+    bool savedMode() const { return m_savedMode; }
+    int savedCount() const { return m_savedStore.count(); }
     QString errorText() const { return m_errorText; }
     // Loading state: explicit setLoading() calls OR an import chain in
     // flight (packet pages of an auto-selected file would otherwise clear
@@ -169,6 +184,18 @@ public:
     Q_INVOKABLE void unpinFilter(const QString &expression);
     Q_INVOKABLE QString saveFilter(const QString &name, const QString &query);
     Q_INVOKABLE void removeSavedFilter(const QString &name);
+    // Pinned sources + saved packets (upstream PacketPinService /
+    // SavedPacketService, C2). Pins filter through the tree-filter keys;
+    // selecting one is a sidebar selection that outlives the tree node state.
+    // Saving stars a row's full summary so it survives the source closing.
+    Q_INVOKABLE void pinPacketAt(int row);
+    Q_INVOKABLE void pinDomain(const QString &domain);
+    Q_INVOKABLE void pinIPAddress(const QString &address);
+    Q_INVOKABLE void removePin(const QString &pinID);
+    Q_INVOKABLE void selectPin(const QString &pinID);
+    Q_INVOKABLE void savePacketAt(int row);
+    Q_INVOKABLE void removeSavedPacket(const QString &packetID);
+    Q_INVOKABLE void selectSavedPackets();
     Q_INVOKABLE void selectTreeFilter(const QString &nodeId);
     Q_INVOKABLE void toggleTreeExpanded(const QString &nodeId);
     Q_INVOKABLE void selectPacket(const QString &packetID);
@@ -199,6 +226,9 @@ signals:
     void filterTextChanged();
     void quickFiltersChanged();
     void filtersChanged();
+    void pinsChanged();
+    void savedModeChanged();
+    void savedPacketsChanged();
     void errorTextChanged();
     void loadingChanged();
     void selectedPacketIDChanged();
@@ -229,6 +259,20 @@ private:
     void resetStream();
     void requestPackets(bool firstPage);
     void persistSavedFilters();
+    // Pinned sources + saved packets (C2). Pin mutations write through to
+    // QSettings; document overlays stay in memory only. Saved annotations
+    // persist on every mutation (matrix stays small — dozens of records).
+    void persistPins();
+    void persistSavedPackets();
+    // Active pin store: the document overlay wins while a session-doc source
+    // is open (upstream PacketPinService useDocumentRecords).
+    const PinStore *activePinStore() const
+    {
+        const auto it = m_documentPins.constFind(m_currentSourceID);
+        return it != m_documentPins.constEnd() ? &it.value() : &m_pinStore;
+    }
+    void handleSessionState(const QVariantMap &data);
+    void leaveSavedMode();
     void setError(const QString &message);
     void setLoading(bool loading);
     void setStopInFlight(bool stopInFlight);
@@ -236,6 +280,15 @@ private:
     void setFilterTextInternal(const QString &filter);
     void applyTreeSelectHook();
     static PacketRow parseSummary(const QVariantMap &summary);
+
+    PinStore m_pinStore;
+    QHash<QString, PinStore> m_documentPins;
+    QString m_selectedPinID;
+    SavedPacketStore m_savedStore;
+    bool m_savedMode = false;
+    // Saved workspace re-entry: the source the packets table showed before
+    // "Saved" was selected.
+    QString m_lastNonSavedSourceID;
 
     DaemonClient *m_client = nullptr;
     PacketListModel *m_packets = nullptr;

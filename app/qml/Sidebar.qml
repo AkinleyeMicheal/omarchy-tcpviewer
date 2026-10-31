@@ -131,9 +131,39 @@ Rectangle {
                 }
 
                 // Upstream PacketSourceListService.putItem: Favorites sits
-                // between Capture and Files. "Pinned" holds one-click pinned
-                // display-filter expressions, "Saved" holds named filters.
+                // between Capture and Files. Upstream semantics are pinned
+                // SOURCES (domains/IPs/clients, PacketPinService) and the
+                // Saved packet list (SavedPacketService); the pinned/saved
+                // display filters moved to the Filters group below.
                 GroupHeader { text: "Favorites" }
+
+                SidebarSubHeader {
+                    visible: root.session.pinnedItems.length > 0
+                    width: treeList.width
+                    text: "Pinned"
+                }
+
+                Repeater {
+                    model: root.session.pinnedItems
+                    delegate: PinnedRow {
+                        required property var modelData
+                        width: treeList.width
+                        pin: modelData
+                    }
+                }
+
+                SidebarPlaceholder {
+                    visible: root.session.pinnedItems.length === 0
+                    width: treeList.width
+                    text: "No pinned sources"
+                }
+
+                SavedRow {
+                    width: treeList.width
+                    selected: root.session.savedMode
+                }
+
+                GroupHeader { text: "Filters" }
 
                 SidebarPlaceholder {
                     visible: root.session.pinnedFilters.length === 0
@@ -145,7 +175,7 @@ Rectangle {
                 SidebarSubHeader {
                     visible: root.session.pinnedFilters.length > 0
                     width: treeList.width
-                    text: "Pinned"
+                    text: "Pinned Expressions"
                 }
 
                 Repeater {
@@ -163,7 +193,7 @@ Rectangle {
                 SidebarSubHeader {
                     visible: root.session.savedFilters.length > 0
                     width: treeList.width
-                    text: "Saved"
+                    text: "Saved Filters"
                 }
 
                 Repeater {
@@ -446,6 +476,172 @@ Rectangle {
         }
     }
 
+    // A pinned source (upstream PacketPin): domain, IP address, or client.
+    // Clicking scopes the table with the same tree-filter keys; the hover ×
+    // removes it. Counts track the packets revision so live rows refresh.
+    component PinnedRow: Item {
+        id: pinRow
+
+        required property var pin
+
+        readonly property bool selected: !root.session.savedMode
+            && root.session.selectedPinID === pinRow.pin.id
+        readonly property bool hovered: pinMouse.containsMouse
+        readonly property string filterKey: pinRow.pin.kind === "domain"
+            ? pinRow.pin.domain
+            : (pinRow.pin.kind === "ip" ? pinRow.pin.ip : pinRow.pin.clientKey)
+
+        height: Theme.sidebarRowHeight
+
+        // countForPin is a C++ call over hidden model state; the revision
+        // makes this binding re-run whenever the row set mutates.
+        readonly property int matchCount: {
+            const rev = root.session.packets.revision
+            return rev >= 0 ? root.session.packets.countForPin(pinRow.pin.kind,
+                                                               pinRow.filterKey) : 0
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.leftMargin: 8
+            anchors.rightMargin: 8
+            radius: 6
+            color: pinRow.selected
+                ? Theme.selection
+                : (pinRow.hovered ? Qt.rgba(Theme.label.r, Theme.label.g, Theme.label.b, 0.06)
+                                  : "transparent")
+        }
+
+        MouseArea {
+            id: pinMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            acceptedButtons: Qt.LeftButton
+            onClicked: root.session.selectPin(pinRow.pin.id)
+        }
+
+        Text {
+            id: pinGlyph
+            anchors.left: parent.left
+            anchors.leftMargin: 26
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.glyphFor(pinRow.pin.kind === "client" ? "app" : pinRow.pin.kind)
+            font.family: Theme.uiFont
+            font.pixelSize: pinRow.pin.kind === "client" ? 9 : 12
+            color: pinRow.selected ? "white" : Theme.systemOrange
+        }
+
+        Text {
+            anchors.left: pinGlyph.right
+            anchors.leftMargin: 7
+            anchors.right: pinRemove.right
+            anchors.rightMargin: 18
+            anchors.verticalCenter: parent.verticalCenter
+            text: pinRow.pin.title
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            font.family: Theme.uiFont
+            font.pixelSize: Theme.uiSize
+            color: pinRow.selected ? "white" : Theme.label
+        }
+
+        Text {
+            anchors.right: pinRemove.right
+            anchors.rightMargin: 18
+            anchors.verticalCenter: parent.verticalCenter
+            visible: pinRow.matchCount > 0 && !pinRow.hovered
+            text: Number(pinRow.matchCount).toLocaleString(Qt.locale(), "f", 0)
+            font.family: Theme.monoFont
+            font.pixelSize: Theme.uiSmall
+            color: pinRow.selected ? Qt.rgba(1, 1, 1, 0.8) : Theme.secondaryLabel
+        }
+
+        Text {
+            id: pinRemove
+            anchors.right: parent.right
+            anchors.rightMargin: 18
+            anchors.verticalCenter: parent.verticalCenter
+            text: "×"
+            font.pixelSize: 12
+            color: pinRow.selected
+                ? Qt.rgba(1, 1, 1, 0.8) : Theme.secondaryLabel
+            opacity: pinRow.hovered ? 1 : 0
+
+            MouseArea {
+                anchors.fill: parent
+                anchors.margins: -6
+                onClicked: root.session.removePin(pinRow.pin.id)
+            }
+        }
+    }
+
+    // The Saved packets row (upstream SavedPacketService): starred packets
+    // render as their own workspace; the badge is the starred total.
+    component SavedRow: Item {
+        id: savedRow
+
+        property bool selected
+
+        readonly property bool hovered: savedMouse.containsMouse
+        height: Theme.sidebarRowHeight
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.leftMargin: 8
+            anchors.rightMargin: 8
+            radius: 6
+            color: savedRow.selected
+                ? Theme.selection
+                : (savedRow.hovered ? Qt.rgba(Theme.label.r, Theme.label.g, Theme.label.b, 0.06)
+                                    : "transparent")
+        }
+
+        MouseArea {
+            id: savedMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            acceptedButtons: Qt.LeftButton
+            onClicked: {
+                if (!savedRow.selected && root.captureMode === "overview")
+                    root.requestMode("packets")
+                root.session.selectSavedPackets()
+            }
+        }
+
+        Text {
+            id: savedGlyph
+            anchors.left: parent.left
+            anchors.leftMargin: 26
+            anchors.verticalCenter: parent.verticalCenter
+            text: "★"
+            font.family: Theme.uiFont
+            font.pixelSize: 10
+            color: savedRow.selected ? "white" : Theme.systemOrange
+        }
+
+        Text {
+            anchors.left: savedGlyph.right
+            anchors.leftMargin: 7
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Saved"
+            textFormat: Text.PlainText
+            font.family: Theme.uiFont
+            font.pixelSize: Theme.uiSize
+            color: savedRow.selected ? "white" : Theme.label
+        }
+
+        Text {
+            anchors.right: parent.right
+            anchors.rightMargin: 22
+            anchors.verticalCenter: parent.verticalCenter
+            visible: root.session.savedCount > 0
+            text: Number(root.session.savedCount).toLocaleString(Qt.locale(), "f", 0)
+            font.family: Theme.monoFont
+            font.pixelSize: Theme.uiSmall
+            color: savedRow.selected ? Qt.rgba(1, 1, 1, 0.8) : Theme.secondaryLabel
+        }
+    }
+
     component TreeRow: Item {
         id: row
 
@@ -459,6 +655,11 @@ Rectangle {
         property bool selected
 
         readonly property bool hovered: mouse.containsMouse
+        // Upstream pins sidebar sources (PacketSourceListService): domain
+        // rows (leaf or expanded) and leaf IP rows offer a hover pin in the
+        // right gutter.
+        readonly property bool pinAvailable: (row.kind === "domain" || row.kind === "ip")
+            && root.captureMode === "packets"
 
         height: Theme.sidebarRowHeight
 
@@ -546,6 +747,38 @@ Rectangle {
             font.family: Theme.monoFont
             font.pixelSize: Theme.uiSmall
             color: row.selected ? Qt.rgba(1, 1, 1, 0.8) : Theme.secondaryLabel
+        }
+
+        // Leaf pin affordance (upstream pinSourceListItems): adds the row's
+        // domain or IP to the Pinned group. Hover lives on this area too so
+        // the glyph stays visible while the pointer is on it.
+        MouseArea {
+            id: treePinArea
+            anchors.right: parent.right
+            anchors.rightMargin: 4
+            anchors.verticalCenter: parent.verticalCenter
+            width: 20
+            height: parent.height
+            hoverEnabled: true
+            enabled: row.pinAvailable
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+                if (row.kind === "domain")
+                    root.session.pinDomain(row.title)
+                else
+                    root.session.pinIPAddress(row.title)
+            }
+        }
+
+        Text {
+            anchors.right: treePinArea.right
+            anchors.rightMargin: 2
+            anchors.verticalCenter: parent.verticalCenter
+            visible: row.pinAvailable && (row.hovered || treePinArea.containsMouse)
+            text: "⚑"
+            font.family: Theme.uiFont
+            font.pixelSize: 11
+            color: Theme.systemOrange
         }
     }
 

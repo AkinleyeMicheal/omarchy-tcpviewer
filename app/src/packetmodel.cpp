@@ -4,6 +4,78 @@
 
 #include <algorithm>
 
+// Full-row persistence shape (saved packets). Keys stay camelCase so the
+// daemon summary names carry over verbatim where they exist.
+QVariantMap packetRowToMap(const PacketRow &row)
+{
+    return QVariantMap{
+        {QStringLiteral("number"), static_cast<qulonglong>(row.number)},
+        {QStringLiteral("packetId"), row.packetId},
+        {QStringLiteral("timeText"), row.timeText},
+        {QStringLiteral("source"), row.source},
+        {QStringLiteral("sourcePort"), row.sourcePort},
+        {QStringLiteral("destination"), row.destination},
+        {QStringLiteral("destinationPort"), row.destinationPort},
+        {QStringLiteral("protocol"), row.protocol},
+        {QStringLiteral("client"), row.client},
+        {QStringLiteral("clientKey"), row.clientKey},
+        {QStringLiteral("clientPid"), row.clientPid},
+        {QStringLiteral("domain"), row.domain},
+        {QStringLiteral("streamId"), row.streamId},
+        {QStringLiteral("summary"), row.summary},
+        {QStringLiteral("tcpFlags"), row.tcpFlags},
+        {QStringLiteral("direction"), row.direction},
+        {QStringLiteral("interfaceName"), row.interfaceName},
+        {QStringLiteral("decodeStatus"), row.decodeStatus},
+        {QStringLiteral("sourceKind"), row.sourceKind},
+        {QStringLiteral("deltaTime"), row.deltaTime},
+        {QStringLiteral("streamDeltaTime"), row.streamDeltaTime},
+        {QStringLiteral("comment"), row.comment},
+        {QStringLiteral("highlightColor"), row.highlightColor},
+        {QStringLiteral("strikethrough"), row.strikethrough},
+        {QStringLiteral("timestampMs"), row.timestampMs},
+        {QStringLiteral("length"), row.length},
+        {QStringLiteral("originalLength"), row.originalLength},
+        {QStringLiteral("tcpPayloadLength"), row.tcpPayloadLength},
+        {QStringLiteral("severity"), row.severity},
+    };
+}
+
+PacketRow packetRowFromMap(const QVariantMap &map)
+{
+    PacketRow row;
+    row.number = map.value(QStringLiteral("number")).toULongLong();
+    row.packetId = map.value(QStringLiteral("packetId")).toString();
+    row.timeText = map.value(QStringLiteral("timeText")).toString();
+    row.source = map.value(QStringLiteral("source")).toString();
+    row.sourcePort = map.value(QStringLiteral("sourcePort")).toString();
+    row.destination = map.value(QStringLiteral("destination")).toString();
+    row.destinationPort = map.value(QStringLiteral("destinationPort")).toString();
+    row.protocol = map.value(QStringLiteral("protocol")).toString();
+    row.client = map.value(QStringLiteral("client")).toString();
+    row.clientKey = map.value(QStringLiteral("clientKey")).toString();
+    row.clientPid = map.value(QStringLiteral("clientPid")).toInt();
+    row.domain = map.value(QStringLiteral("domain")).toString();
+    row.streamId = map.value(QStringLiteral("streamId")).toString();
+    row.summary = map.value(QStringLiteral("summary")).toString();
+    row.tcpFlags = map.value(QStringLiteral("tcpFlags")).toString();
+    row.direction = map.value(QStringLiteral("direction")).toString();
+    row.interfaceName = map.value(QStringLiteral("interfaceName")).toString();
+    row.decodeStatus = map.value(QStringLiteral("decodeStatus")).toString();
+    row.sourceKind = map.value(QStringLiteral("sourceKind")).toString();
+    row.deltaTime = map.value(QStringLiteral("deltaTime")).toString();
+    row.streamDeltaTime = map.value(QStringLiteral("streamDeltaTime")).toString();
+    row.comment = map.value(QStringLiteral("comment")).toString();
+    row.highlightColor = map.value(QStringLiteral("highlightColor")).toString();
+    row.strikethrough = map.value(QStringLiteral("strikethrough")).toBool();
+    row.timestampMs = map.value(QStringLiteral("timestampMs")).toLongLong();
+    row.length = map.value(QStringLiteral("length")).toInt();
+    row.originalLength = map.value(QStringLiteral("originalLength")).toInt();
+    row.tcpPayloadLength = map.value(QStringLiteral("tcpPayloadLength")).toInt();
+    row.severity = map.value(QStringLiteral("severity")).toInt();
+    return row;
+}
+
 PacketListModel::PacketListModel(QObject *parent)
     : QAbstractTableModel(parent)
 {
@@ -157,6 +229,9 @@ void PacketListModel::clear()
         endRemoveRows();
     }
     m_lastPacketID = 0;
+    // Row-set mutation: derived consumers (pin counts) re-run.
+    ++m_revision;
+    emit revisionChanged();
     emit countChanged();
 }
 
@@ -290,6 +365,98 @@ int PacketListModel::rowForPacketID(const QString &packetID) const
             return row;
     }
     return -1;
+}
+
+const QString &PacketListModel::clientKeyAt(int row) const
+{
+    static const QString empty;
+    const int source = sourceRow(row);
+    if (source < 0)
+        return empty;
+    return m_rows.at(source).clientKey;
+}
+
+QString PacketListModel::clientNameAt(int row) const
+{
+    if (row < 0)
+        return {};
+    return data(index(row, 0), ClientRole).toString();
+}
+
+QVariantMap PacketListModel::rowSnapshotAt(int row) const
+{
+    const int source = sourceRow(row);
+    if (source < 0)
+        return {};
+    return packetRowToMap(m_rows.at(source));
+}
+
+int PacketListModel::countForPin(const QString &kind, const QString &key) const
+{
+    // Same scope rules as matchesTreeFilter: pins count the whole currently
+    // loaded row set (upstream counts from the source-list assignments).
+    QString wanted = key.trimmed();
+    if (wanted.isEmpty())
+        return 0;
+
+    int count = 0;
+    if (kind == QStringLiteral("domain")) {
+        wanted = normalizedPacketDomain(wanted);
+        for (const PacketRow &row : m_rows) {
+            if (normalizedPacketDomain(row.domain) == wanted)
+                ++count;
+        }
+    } else if (kind == QStringLiteral("ip")) {
+        wanted = normalizedPacketIP(wanted);
+        for (const PacketRow &row : m_rows) {
+            // Upstream only places no-domain packets in IP buckets.
+            if (!row.domain.isEmpty())
+                continue;
+            if (normalizedPacketIP(row.source) == wanted
+                || normalizedPacketIP(row.destination) == wanted)
+                ++count;
+        }
+    } else if (kind == QStringLiteral("client")) {
+        for (const PacketRow &row : m_rows) {
+            if (row.clientKey == wanted)
+                ++count;
+        }
+    }
+    return count;
+}
+
+void PacketListModel::loadRows(const QVariantList &rows)
+{
+    QVector<PacketRow> parsed;
+    parsed.reserve(rows.size());
+    for (const QVariant &value : rows) {
+        const QVariantMap map = value.toMap();
+        if (map.isEmpty())
+            continue;
+        parsed.append(packetRowFromMap(map));
+    }
+
+    beginResetModel();
+    m_rows = parsed;
+    m_visibleRows.clear();
+    // Tree filters apply to the loaded set only; the Saved workspace starts
+    // with the filter cleared by the controller, so rebuild defensively.
+    if (m_treeFilterActive) {
+        m_visibleRows.reserve(parsed.size());
+        for (int row = 0; row < m_rows.size(); ++row) {
+            if (matchesTreeFilter(m_rows.at(row)))
+                m_visibleRows.append(row);
+        }
+    }
+    m_lastPacketID = 0;
+    for (const PacketRow &row : m_rows) {
+        if (row.number > m_lastPacketID)
+            m_lastPacketID = row.number;
+    }
+    endResetModel();
+    ++m_revision;
+    emit revisionChanged();
+    emit countChanged();
 }
 
 QVariantList PacketListModel::snapshotRows() const
@@ -433,5 +600,7 @@ void PacketListModel::appendRows(const QVector<PacketRow> &rows)
             m_lastPacketID = row.number;
     }
     // totalCount changed even when the active filter hides every new row.
+    ++m_revision;
+    emit revisionChanged();
     emit countChanged();
 }

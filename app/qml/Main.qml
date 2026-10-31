@@ -773,7 +773,7 @@ ApplicationWindow {
 
     // Upstream Diff menu (⌘Y): snapshot the selected packet into the pool.
     function addSelectedToDiff() {
-        if (session.selectedPacketID === "")
+        if (session.selectedPacketID === "" || session.savedMode)
             return
         const row = session.packets.rowForPacketID(session.selectedPacketID)
         if (row < 0)
@@ -820,8 +820,11 @@ ApplicationWindow {
             ? String(session.packets.packetIDAt(pendingRow)) : ""
         readonly property string pendingComment: pendingRow >= 0
             ? String(session.packets.commentAt(pendingRow)) : ""
+        readonly property string pendingClientKey: pendingRow >= 0
+            ? String(session.packets.clientKeyAt(pendingRow)) : ""
         readonly property bool annotationEnabled: pendingPacketID !== ""
-            && session.currentSourceID !== "" && !session.loading
+            && (session.savedMode
+                || (session.currentSourceID !== "" && !session.loading))
 
         function openFor(index, globalX, globalY) {
             pendingRow = index
@@ -832,11 +835,13 @@ ApplicationWindow {
         MenuItem {
             text: rowContextMenu.pendingProtocol.indexOf("TCP") >= 0
                 ? "Follow TCP Stream" : "Follow UDP Stream"
+            enabled: !session.savedMode
             onTriggered: follow.follow(String(session.packets.packetIDAt(rowContextMenu.pendingRow)))
         }
 
         MenuItem {
             text: "Diff Selected Packet"
+            enabled: !session.savedMode
             onTriggered: {
                 const row = rowContextMenu.pendingRow
                 if (row < 0)
@@ -845,6 +850,35 @@ ApplicationWindow {
                                session.packets.numberAt(row), session.packets.summaryAt(row))
                 diffWindow.openAndRaise()
             }
+        }
+
+        MenuSeparator {
+            visible: !session.savedMode
+        }
+
+        // Upstream row menu order: Pin + Save live between Diff and the
+        // annotation section (PacketTableContextMenuController).
+        MenuItem {
+            text: "Pin"
+            enabled: !session.savedMode && !session.loading
+                && session.currentSourceID !== ""
+                && rowContextMenu.pendingClientKey !== ""
+            onTriggered: session.pinPacketAt(rowContextMenu.pendingRow)
+        }
+
+        MenuItem {
+            text: "Save"
+            enabled: !session.savedMode && !session.loading
+                && session.currentSourceID !== ""
+                && rowContextMenu.pendingPacketID !== ""
+            onTriggered: session.savePacketAt(rowContextMenu.pendingRow)
+        }
+
+        MenuItem {
+            visible: session.savedMode
+            enabled: session.savedMode && rowContextMenu.pendingPacketID !== ""
+            text: "Remove from Saved"
+            onTriggered: session.removeSavedPacket(rowContextMenu.pendingPacketID)
         }
 
         MenuSeparator {
@@ -1133,7 +1167,9 @@ ApplicationWindow {
         function presentPacket(packetID) {
             focusPane()
             controller.selectPacket(packetID)
-            if (!window.benchEnabled)
+            // Saved rows are app-side copies; skip the detail fetch so the
+            // daemon's fallback findSource never shows another packet's bytes.
+            if (!window.benchEnabled && !controller.savedMode)
                 paneInspector.select(packetID, controller.currentSourceID)
         }
 
@@ -1143,7 +1179,7 @@ ApplicationWindow {
             controller.selectPacket(packetID)
             paneTable.selectedIndex = packetID === ""
                 ? -1 : controller.packets.rowForPacketID(packetID)
-            if (!window.benchEnabled)
+            if (!window.benchEnabled && !controller.savedMode)
                 paneInspector.select(packetID, controller.currentSourceID)
         }
 
@@ -1310,8 +1346,23 @@ ApplicationWindow {
                     EmptyState {
                         anchors.fill: parent
                         visible: !window.benchEnabled && window.captureMode === "packets"
+                                 && controller.savedMode
+                                 && controller.packets.count === 0 && !controller.loading
+                        glyph: "★"
+                        title: "Saved Packets"
+                        message: "Right-click a packet and choose Save to add it here."
+                                 + " Saved packets keep their comments and highlights"
+                                 + " after the source closes."
+                        showStartAction: false
+                        showOpenAction: false
+                    }
+
+                    EmptyState {
+                        anchors.fill: parent
+                        visible: !window.benchEnabled && window.captureMode === "packets"
                                  && controller.packets.count === 0
                                  && !controller.loading && controller.currentSourceID === ""
+                                 && !controller.savedMode
                         onStartCaptureRequested: session.startCapture(session.selectedInterface)
                         onOpenFileRequested: window.openCaptureDialog()
                     }
@@ -1358,7 +1409,7 @@ ApplicationWindow {
                 paneTable.selectedIndex = session.selectedPacketID === ""
                     ? -1
                     : controller.packets.rowForPacketID(session.selectedPacketID)
-                if (workspace.focused && !window.benchEnabled)
+                if (workspace.focused && !window.benchEnabled && !controller.savedMode)
                     paneInspector.select(session.selectedPacketID, controller.currentSourceID)
             }
         }

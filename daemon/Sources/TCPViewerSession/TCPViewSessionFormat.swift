@@ -162,8 +162,8 @@ public struct TCPViewSessionState: Codable, Equatable {
     public let backingIdentity: String?
     public let importedFiles: [SessionImportedFileRecord]
     public let importedPacketReferences: [SessionImportedPacketReferenceRecord]
-    public let pins: [SessionPinRecord]
-    public let savedPackets: [SessionSavedPacketRecord]
+    public var pins: [SessionPinRecord]
+    public var savedPackets: [SessionSavedPacketRecord]
     public let customFilters: [SessionCustomFilterRecord]
     public let quickFilterSelection: SessionQuickFilterSelection
     public let structuredFilterGroup: SessionStructuredFilterGroup
@@ -264,8 +264,41 @@ public struct SessionImportedPacketReferenceRecord: Codable, Equatable {
     public init() {}
 }
 
+/// Upstream PacketPin (PacketPinService) Codable mirror. Keys stay camelCase
+/// exactly as upstream's auto-Codable writes them; Date rides the package
+/// codec's iso8601 strategy in both directions.
 public struct SessionPinRecord: Codable, Equatable {
-    public init() {}
+    public let id: String
+    public let kind: String
+    public let title: String
+    public let createdAt: Date?
+    public let domain: String?
+    public let ipAddress: String?
+    public let clientKey: String?
+    public let clientDisplayName: String?
+    public let clientIconFilePath: String?
+
+    public init(
+        id: String,
+        kind: String,
+        title: String,
+        createdAt: Date? = nil,
+        domain: String? = nil,
+        ipAddress: String? = nil,
+        clientKey: String? = nil,
+        clientDisplayName: String? = nil,
+        clientIconFilePath: String? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.title = title
+        self.createdAt = createdAt
+        self.domain = domain
+        self.ipAddress = ipAddress
+        self.clientKey = clientKey
+        self.clientDisplayName = clientDisplayName
+        self.clientIconFilePath = clientIconFilePath
+    }
 }
 
 public struct SessionSavedPacketRecord: Codable, Equatable {

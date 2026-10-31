@@ -37,12 +37,14 @@ let twoWordCommands: Set<String> = [
     "packets.set_style", "packets.set_comment",
     "stream.packets", "stream.follow",
     "file.import", "file.export", "file.export_session",
+    "file.session_state",
     "app.status",
 ]
 
 // Positional argument mapping for upstream's "COMMAND ID" forms.
 let positionalKeys: [String: [String]] = [
     "packets.details": ["packet_id"],
+    "file.session_state": ["source_id"],
     "packets.bytes": ["packet_id"],
     "stream.packets": ["stream_id"],
     "stream.follow": ["packet_id"],
@@ -82,6 +84,7 @@ func usage() -> Never {
                              [--encoding text|hex|base64]
       file import PATH... | file export PATH --format pcap|pcapng SELECTOR [--overwrite]
       file export_session PATH [--overwrite]
+      file session-state SOURCE_ID    Session-document pins (empty for captures)
 
     options:
       --output json|text   default json (schema_version 1)
@@ -109,9 +112,11 @@ func parseArguments() -> CLIArguments {
     iterator.removeFirst()
     var commandPath = [first]
 
-    // Two-word form: second token is a bare verb, not a flag/value.
+    // Two-word form: second token is a bare verb, not a flag/value. Hyphen
+    // verbs ("packets set-style") match their canonical "_" spelling.
     if let second = iterator.first, !second.hasPrefix("--"),
-        twoWordCommands.contains((commandPath + [second]).joined(separator: ".")) {
+        twoWordCommands.contains((commandPath + [second]).joined(separator: ".")
+            .replacingOccurrences(of: "-", with: "_")) {
         commandPath.append(second)
         iterator.removeFirst()
     }
@@ -199,14 +204,22 @@ func buildRequest(args: CLIArguments) -> IPCRequest {
 
     // Positionals in declared order (upstream "COMMAND ID" forms).
     if let keys = positionalKeys[command.rawValue] {
-        guard args.positionals.count >= keys.count else {
-            fail("missing argument: \(keys.last!.replacingOccurrences(of: "_", with: " "))", code: 2)
-        }
-        for (index, key) in keys.enumerated() {
-            params[key] = .string(args.positionals[index])
+        // Flag forms satisfy positional requirements ("file.session_state
+        // --source-id X" == "file session-state X").
+        if args.positionals.count < keys.count {
+            for (index, key) in keys.enumerated() {
+                if index < args.positionals.count { continue }
+                if args.flags[key] != nil || args.flags[key.replacingOccurrences(of: "_", with: "-")] != nil {
+                    continue
+                }
+                fail("missing argument: \(keys.last!.replacingOccurrences(of: "_", with: " "))", code: 2)
+            }
         }
         if args.positionals.count > keys.count {
             fail("too many arguments for \(command.rawValue)", code: 2)
+        }
+        for (index, key) in keys.enumerated() where index < args.positionals.count {
+            params[key] = .string(args.positionals[index])
         }
     } else if !args.positionals.isEmpty {
         if command == .fileImport {

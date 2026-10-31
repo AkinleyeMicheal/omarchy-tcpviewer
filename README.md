@@ -201,8 +201,15 @@ page header.
   DNS name, TLS server name, protocol, frame text and packet length, previews
   the generated expression, and applies it with Enter or **Apply**.
 - **Favorites** — pin the current expression with ☆ or save it under a name
-  with ⊕. Pinned and saved filters live in the sidebar's **Favorites** group
+  with ⊕. Pinned and saved filters live in the sidebar's **Filters** group
   and apply with one click; the row's × removes them.
+- **Pinned sources & Saved packets** — hover a domain or IP row in the
+  source tree for a pin flag, or right-click a packet and choose **Pin** to
+  pin its client; pinned rows scope the table with one click. **Save** on a
+  packet row copies it into the **Saved** workspace, where comments and
+  highlights survive closing (and even deleting) the source. Both persist
+  in QSettings across launches; pins carried inside a `.tcpviewsession`
+  document appear while that session is open.
 
 ![Structured filter builder](docs/filter-builder.png)
 
@@ -212,7 +219,9 @@ Captures can be saved as a `.tcpviewsession` bundle (**Export Session** in the
 toolbar / `file.export_session` in the CLI) and reopened later — the file
 carries the packets, the backing pcapng, annotations (comments and highlight
 colors), client records and workspace state, mirroring upstream TCP Viewer's
-session format. Sessions are read-only once saved: export packets or create a
+session format; pins stored in the document are picked up in the sidebar
+while the session is open (exporting pins back into the bundle lands with
+C5). Sessions are read-only once saved: export packets or create a
 new session instead of re-saving. A session opens by itself — it cannot be
 merged with other capture files in one import. The format is
 byte-compatible with the macOS app, so files interchange both ways.

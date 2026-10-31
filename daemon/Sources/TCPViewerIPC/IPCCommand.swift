@@ -6,7 +6,8 @@
 //  TCPViewerCLIShared/TCPViewerCLIModels.swift where a command exists there,
 //  so automation written against upstream translates directly.
 //
-//  Documented divergences from upstream CLI.md (see docs/ipc.md):
+//  Documented divergences from upstream CLI.md (see docs/security-checklist.md
+//  and the plugin README for the ported command surface):
 //  - `license.*` omitted: the port is fully open, no license gating.
 //  - `workspace.*`, `tabs.*`, `pane.*`, `split.*`, `diff.*`, `packets.reveal`
 //    omitted: these model GUI window state; tabs/splits/diff live entirely
@@ -58,6 +59,10 @@ public enum IPCCommand: String, Codable, CaseIterable {
     case fileImport = "file.import"
     case fileExport = "file.export"
     case fileExportSession = "file.export_session"
+
+    /// Session-document workspace state for a loaded source (pins for now).
+    /// New in our schema: upstream keeps document state in-process.
+    case fileSessionState = "file.session_state"
 
     /// Abort an in-flight `file.import` chain (cancel current file and stop
     /// loading the remaining ones). New in our schema.

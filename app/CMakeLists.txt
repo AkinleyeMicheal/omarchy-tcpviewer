@@ -24,6 +24,8 @@ qt_add_executable(omarchy-tcpviewer
     src/daemonclient.cpp
     src/sessioncontroller.cpp
     src/packetinspector.cpp
+    src/pinstore.cpp
+    src/savedpacketstore.cpp
     src/diffcontroller.cpp
     src/diffalgorithms.cpp
 )
@@ -126,4 +128,14 @@ if(TCPVIEWER_BUILD_TESTS)
     target_include_directories(sourcetreemodel_test PRIVATE src)
     target_link_libraries(sourcetreemodel_test PRIVATE Qt6::Test Qt6::Qml)
     add_test(NAME sourcetreemodel COMMAND sourcetreemodel_test)
+
+    qt_add_executable(annotationsstores_test
+        tests/annotationsstores_test.cpp
+        src/packetmodel.cpp
+        src/pinstore.cpp
+        src/savedpacketstore.cpp
+    )
+    target_include_directories(annotationsstores_test PRIVATE src)
+    target_link_libraries(annotationsstores_test PRIVATE Qt6::Test Qt6::Qml)
+    add_test(NAME annotationsstores COMMAND annotationsstores_test)
 endif()

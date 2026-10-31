@@ -344,6 +344,13 @@ final class CommandRouter: @unchecked Sendable {
                 respond(.failure(error))
             }
 
+        case .fileSessionState:
+            manager.sessionState(
+                sourceID: request.optionalString("source_id")
+            ) { result in
+                respond(result)
+            }
+
         case .eventsSubscribe:
             let enabled = request.bool("enabled") ?? true
             setSubscription(enabled)

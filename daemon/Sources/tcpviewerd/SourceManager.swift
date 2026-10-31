@@ -1678,6 +1678,46 @@ final class SourceManager: @unchecked Sendable {
         }
     }
 
+    /// Session-document workspace state for a source (pins for now; the
+    /// saved-packets and full app-state round-trip are later phases). Non-
+    /// session sources (pcap/pcapng, live captures) return an empty state so
+    /// clients drop any document overlay.
+    func sessionState(
+        sourceID: String?,
+        completion: @escaping (Result<[String: IPCValue], Error>) -> Void
+    ) {
+        queue.async {
+            guard let source = self.resolveSource(id: sourceID, completion: completion) else { return }
+            let pins = (source.offlineDocument as? SessionBundleDocument)?
+                .contents.state.pins ?? []
+            // The source echo lets clients attribute out-of-order replies
+            // after rapid source switches without request-id bookkeeping.
+            completion(.success([
+                "source_id": .string(source.id),
+                "pins": .array(pins.map(Self.pinValues)),
+            ]))
+        }
+    }
+
+    // Upstream PacketPin wire shape (snake_case IPC keys over the camelCase
+    // session fields — pin filter keys and display data for the client).
+    private static func pinValues(_ pin: SessionPinRecord) -> IPCValue {
+        var values: [String: IPCValue] = [
+            "id": .string(pin.id),
+            "kind": .string(pin.kind),
+            "title": .string(pin.title),
+        ]
+        if let createdAt = pin.createdAt {
+            values["created_at"] = .double(createdAt.timeIntervalSince1970)
+        }
+        if let domain = pin.domain { values["domain"] = .string(domain) }
+        if let ip = pin.ipAddress { values["ip"] = .string(ip) }
+        if let clientKey = pin.clientKey { values["client_key"] = .string(clientKey) }
+        if let client = pin.clientDisplayName { values["client_display_name"] = .string(client) }
+        if let iconPath = pin.clientIconFilePath { values["client_icon_path"] = .string(iconPath) }
+        return .object(values)
+    }
+
     /// Offline .tcpviewsession export: stages the capture via a document save,
     /// then writes the ZIP bundle (packets + sidecars) atomically. Session
     /// sources re-export their own carried state; regular offline sources

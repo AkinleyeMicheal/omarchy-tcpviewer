@@ -4,6 +4,8 @@
 #include <QDateTime>
 #include <QFile>
 #include <QGuiApplication>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSettings>
 #include <QTimer>
 #include <QUrl>
@@ -118,6 +120,43 @@ SessionController::SessionController(QObject *parent)
         settings.endArray();
     }
 
+    // Pinned sources + saved packets (C2): app-side persistence in QSettings,
+    // beside the display-filter favorites. Pins use explicit fields (the
+    // filters pattern); saved rows serialize one JSON record each — a full
+    // PacketRow has too many fields for named keys.
+    {
+        QSettings settings;
+        const int pinCount = settings.beginReadArray(QStringLiteral("pins"));
+        for (int i = 0; i < pinCount; ++i) {
+            settings.setArrayIndex(i);
+            PinRecord pin;
+            pin.id = settings.value(QStringLiteral("id")).toString();
+            pin.kind = settings.value(QStringLiteral("kind")).toString();
+            pin.title = settings.value(QStringLiteral("title")).toString();
+            pin.domain = settings.value(QStringLiteral("domain")).toString();
+            pin.ip = settings.value(QStringLiteral("ip")).toString();
+            pin.clientKey = settings.value(QStringLiteral("clientKey")).toString();
+            pin.clientDisplay =
+                settings.value(QStringLiteral("clientDisplay")).toString();
+            pin.iconPath = settings.value(QStringLiteral("iconPath")).toString();
+            pin.createdAtMs = settings.value(QStringLiteral("createdAt")).toLongLong();
+            m_pinStore.upsert(pin);
+        }
+        settings.endArray();
+
+        QVariantList savedValues;
+        const int savedRows = settings.beginReadArray(QStringLiteral("packets/saved"));
+        for (int i = 0; i < savedRows; ++i) {
+            settings.setArrayIndex(i);
+            const QJsonObject object = QJsonDocument::fromJson(
+                settings.value(QStringLiteral("record")).toString().toUtf8()).object();
+            if (!object.isEmpty())
+                savedValues.append(object.toVariantMap());
+        }
+        settings.endArray();
+        m_savedStore.loadFromVariantList(savedValues);
+    }
+
     m_pollTimer = new QTimer(this);
     m_pollTimer->setInterval(100);
     connect(m_pollTimer, &QTimer::timeout, this, [this]() { requestPackets(false); });
@@ -147,6 +186,12 @@ void SessionController::start()
             if (importing())
                 cancelImport();
         });
+    }
+
+    // CI/test hook: start in the Saved workspace so fixture screenshots can
+    // capture starred rows and the sidebar count without a click path.
+    if (qEnvironmentVariableIsSet("TCPVIEWER_SAVED_VIEW")) {
+        QTimer::singleShot(1500, this, [this]() { selectSavedPackets(); });
     }
 
     // A local socket can connect synchronously, so the pending list must exist
@@ -350,6 +395,14 @@ void SessionController::closeSource(const QString &sourceID)
 
 void SessionController::selectSource(const QString &sourceID)
 {
+    // Sidebar switches leave the Saved workspace for the real source flow.
+    if (m_savedMode) {
+        m_savedMode = false;
+        emit savedModeChanged();
+        m_lastNonSavedSourceID.clear();
+        selectSourceInternal(sourceID);
+        return;
+    }
     if (sourceID == m_currentSourceID) {
         resetStream();
         return;
@@ -360,6 +413,18 @@ void SessionController::selectSource(const QString &sourceID)
 void SessionController::selectSourceInternal(const QString &sourceID)
 {
     clearSelection();
+    if (m_savedMode) {
+        // Defensive: every path into a real source leaves the saved view.
+        m_savedMode = false;
+        emit savedModeChanged();
+        m_lastNonSavedSourceID.clear();
+    }
+    // Pinned-source selection resets with the scope like the tree's own
+    // selection does; the applied filter stays source-sticky as before.
+    if (!m_selectedPinID.isEmpty()) {
+        m_selectedPinID.clear();
+        emit pinsChanged();
+    }
     m_currentSourceID = sourceID;
     m_customColumns->setSourceID(sourceID);
     m_status.clear();
@@ -397,10 +462,27 @@ void SessionController::selectSourceInternal(const QString &sourceID)
     resetStream();
     refreshStatus();
     emit sourceOpened(sourceID);
+
+    // Document-scoped pins for session bundles (upstream
+    // PacketPinService.documentRecords): ask for the carried pins; the reply
+    // installs (or clears) the overlay keyed by this source.
+    if (m_client->connected()) {
+        m_client->send(QStringLiteral("file.session_state"),
+                       {{QStringLiteral("source_id"), sourceID}});
+    }
 }
 
 void SessionController::clearPackets()
 {
+    if (m_savedMode) {
+        // The Saved workspace version of "Clear All Packets" empties the
+        // starred list itself (nothing is held daemon-side).
+        m_savedStore.clear();
+        persistSavedPackets();
+        emit savedPacketsChanged();
+        m_packets->clear();
+        return;
+    }
     if (!m_client->connected() || m_currentSourceID.isEmpty())
         return;
     m_client->send(QStringLiteral("packets.clear"),
@@ -477,6 +559,24 @@ void SessionController::dispatchPacketAnnotation(
     // handles failures).
     PacketListModel::AnnotationChange applied = change;
     m_packets->applyAnnotation({id}, applied);
+
+    // Saved workspace: no daemon backing — records ARE the copies, write
+    // through and stop.
+    if (m_savedMode) {
+        if (m_savedStore.applyAnnotation({id}, change) > 0) {
+            persistSavedPackets();
+            emit savedPacketsChanged();
+        }
+        return;
+    }
+
+    // Starred copies backed by the active capture stay in sync with it
+    // (upstream backingIdentity == active ingest identity rule).
+    if (!m_currentSourceID.isEmpty()
+        && m_savedStore.applyAnnotation({id}, change, m_currentSourceID) > 0) {
+        persistSavedPackets();
+        emit savedPacketsChanged();
+    }
 
     if (!m_client->connected() || m_currentSourceID.isEmpty())
         return;
@@ -601,6 +701,277 @@ void SessionController::persistSavedFilters()
                           map.value(QStringLiteral("query")));
     }
     settings.endArray();
+}
+
+// MARK: - Pinned sources + saved packets (C2)
+
+QVariantList SessionController::pinnedItems() const
+{
+    QVariantList values;
+    const PinStore *store = activePinStore();
+    values.reserve(store->count());
+    for (const PinRecord &pin : store->records()) {
+        values.append(QVariantMap{
+            {QStringLiteral("id"), pin.id},
+            {QStringLiteral("kind"), pin.kind},
+            {QStringLiteral("title"), pin.title},
+            {QStringLiteral("domain"), pin.domain},
+            {QStringLiteral("ip"), pin.ip},
+            {QStringLiteral("clientKey"), pin.clientKey},
+            {QStringLiteral("clientDisplay"), pin.clientDisplay},
+        });
+    }
+    return values;
+}
+
+void SessionController::persistPins()
+{
+    QSettings settings;
+    settings.remove(QStringLiteral("pins"));
+    settings.beginWriteArray(QStringLiteral("pins"));
+    for (int i = 0; i < m_pinStore.count(); ++i) {
+        settings.setArrayIndex(i);
+        const QVariantMap map = m_pinStore.records().at(i).toMap();
+        settings.setValue(QStringLiteral("id"), map.value(QStringLiteral("id")));
+        settings.setValue(QStringLiteral("kind"), map.value(QStringLiteral("kind")));
+        settings.setValue(QStringLiteral("title"), map.value(QStringLiteral("title")));
+        settings.setValue(QStringLiteral("domain"), map.value(QStringLiteral("domain")));
+        settings.setValue(QStringLiteral("ip"), map.value(QStringLiteral("ip")));
+        settings.setValue(QStringLiteral("clientKey"), map.value(QStringLiteral("clientKey")));
+        settings.setValue(QStringLiteral("clientDisplay"),
+                          map.value(QStringLiteral("clientDisplay")));
+        settings.setValue(QStringLiteral("iconPath"), map.value(QStringLiteral("iconPath")));
+        settings.setValue(QStringLiteral("createdAt"), map.value(QStringLiteral("createdAt")));
+    }
+    settings.endArray();
+}
+
+void SessionController::persistSavedPackets()
+{
+    QSettings settings;
+    settings.remove(QStringLiteral("packets/saved"));
+    settings.beginWriteArray(QStringLiteral("packets/saved"));
+    const QVariantList values = m_savedStore.toVariantList();
+    for (int i = 0; i < values.size(); ++i) {
+        settings.setArrayIndex(i);
+        settings.setValue(QStringLiteral("record"),
+                          QString::fromUtf8(QJsonDocument(
+                              QJsonObject::fromVariantMap(values.at(i).toMap()))
+                                                .toJson(QJsonDocument::Compact)));
+    }
+    settings.endArray();
+}
+
+void SessionController::pinDomain(const QString &domain)
+{
+    const QString normalized = normalizedPacketDomain(domain);
+    if (normalized.isEmpty())
+        return;
+    PinRecord pin;
+    pin.kind = QStringLiteral("domain");
+    pin.title = normalized;
+    pin.domain = normalized;
+    pin.id = PinStore::idFor(pin.kind, normalized);
+    const PinRecord stored = m_pinStore.upsert(pin);
+    if (stored.isValid()) {
+        persistPins();
+        emit pinsChanged();
+    }
+}
+
+void SessionController::pinIPAddress(const QString &address)
+{
+    const QString normalized = normalizedPacketIP(address);
+    if (normalized.isEmpty())
+        return;
+    PinRecord pin;
+    pin.kind = QStringLiteral("ip");
+    pin.title = normalized;
+    pin.ip = normalized;
+    pin.id = PinStore::idFor(pin.kind, normalized);
+    const PinRecord stored = m_pinStore.upsert(pin);
+    if (stored.isValid()) {
+        persistPins();
+        emit pinsChanged();
+    }
+}
+
+void SessionController::pinPacketAt(int row)
+{
+    // Upstream packet-table "Pin" pins the selected app identity (client);
+    // rows without a client keep the item disabled.
+    const QString clientKey = m_packets->clientKeyAt(row);
+    if (clientKey.isEmpty())
+        return;
+    PinRecord pin;
+    pin.kind = QStringLiteral("client");
+    pin.clientKey = clientKey;
+    pin.clientDisplay = m_packets->clientNameAt(row);
+    pin.title = pin.clientDisplay.isEmpty() ? clientKey.section(QLatin1Char('/'), -1)
+                                            : pin.clientDisplay;
+    pin.id = PinStore::idFor(pin.kind, clientKey);
+    const PinRecord stored = m_pinStore.upsert(pin);
+    if (!stored.isValid())
+        return;
+
+    // Upstream selectAfterPinning: the table re-scopes to the new pin.
+    persistPins();
+    emit pinsChanged();
+    selectPin(stored.id);
+}
+
+void SessionController::removePin(const QString &pinID)
+{
+    const bool removed = activePinStore() == &m_pinStore
+        ? m_pinStore.remove(pinID)
+        : m_documentPins[m_currentSourceID].remove(pinID);
+    if (!removed)
+        return;
+
+    // Persistent pins write through; document overlays are memory-only
+    // (upstream persists them with the document on Save; ours re-decode).
+    if (activePinStore() == &m_pinStore)
+        persistPins();
+    if (m_selectedPinID == pinID) {
+        m_selectedPinID.clear();
+        m_packets->clearTreeFilter();
+        m_sourceTree->clearNodeSelection();
+    }
+    emit pinsChanged();
+}
+
+void SessionController::selectPin(const QString &pinID)
+{
+    const PinRecord pin = activePinStore()->find(pinID);
+    if (!pin.isValid())
+        return;
+    if (m_savedMode)
+        leaveSavedMode();
+
+    // Upstream selection is a single enum: picking a pin leaves the tree
+    // node selection behind; picking a tree node/filters leaves the pin.
+    clearSelection();
+    m_sourceTree->clearNodeSelection();
+    if (pin.kind == QStringLiteral("domain"))
+        m_packets->setTreeFilter(QString(), pin.domain, QString(), false, false);
+    else if (pin.kind == QStringLiteral("ip"))
+        m_packets->setTreeFilter(QString(), QString(), pin.ip, false, false);
+    else if (pin.kind == QStringLiteral("client"))
+        m_packets->setTreeFilter(pin.clientKey, QString(), QString(), false, false);
+    else
+        return;
+
+    m_selectedPinID = pinID;
+    emit pinsChanged();
+}
+
+void SessionController::savePacketAt(int row)
+{
+    const QString packetID = m_packets->packetIDAt(row);
+    if (packetID.isEmpty() || m_savedMode)
+        return;
+    const PacketRow saved = packetRowFromMap(m_packets->rowSnapshotAt(row));
+    // The snapshot's own id is authoritative; guard against a model/daemon
+    // mismatch by re-checking the readback.
+    if (saved.packetId.isEmpty() || saved.packetId != packetID)
+        return;
+    const int added = m_savedStore.add({saved}, m_currentSourceID);
+    if (added == 0)
+        return;
+    persistSavedPackets();
+    emit savedPacketsChanged();
+}
+
+void SessionController::removeSavedPacket(const QString &packetID)
+{
+    // Starred rows with matching ids from different sources can coexist
+    // (pcap numbering restarts); removal targets the first ordered record,
+    // the visible one, so a second removal clears the next copy.
+    if (!m_savedStore.remove(packetID))
+        return;
+    persistSavedPackets();
+    emit savedPacketsChanged();
+    if (!m_savedMode)
+        return;
+    QVector<PacketRow> rows;
+    rows.reserve(m_savedStore.count());
+    for (const SavedPacketRecord &record : m_savedStore.records())
+        rows.append(record.row);
+    m_packets->clear();
+    m_packets->appendRows(rows);
+}
+
+void SessionController::selectSavedPackets()
+{
+    if (m_savedMode)
+        return;
+    m_lastNonSavedSourceID = m_currentSourceID;
+
+    // Invalidates any in-flight packets.list page for the previous source.
+    m_streamEpoch++;
+    m_pageEpoch.clear();
+    m_savedMode = true;
+    emit savedModeChanged();
+
+    clearSelection();
+    m_selectedPinID.clear();
+    emit pinsChanged();
+    m_sourceTree->clearNodeSelection();
+    m_packets->clearTreeFilter();
+    m_currentSourceID.clear();
+    emit currentSourceChanged();
+
+    QVector<PacketRow> rows;
+    rows.reserve(m_savedStore.count());
+    for (const SavedPacketRecord &record : m_savedStore.records())
+        rows.append(record.row);
+    m_packets->clearTreeFilter();
+    m_packets->clear();
+    m_packets->appendRows(rows);
+    setLoading(false);
+}
+
+void SessionController::leaveSavedMode()
+{
+    if (!m_savedMode)
+        return;
+    m_savedMode = false;
+    emit savedModeChanged();
+    const QString previousSource = m_lastNonSavedSourceID;
+    m_lastNonSavedSourceID.clear();
+    m_sourceTree->clearNodeSelection();
+    if (!previousSource.isEmpty()) {
+        selectSourceInternal(previousSource);
+    } else {
+        m_packets->clearTreeFilter();
+        m_packets->clear();
+        setLoading(false);
+    }
+}
+
+void SessionController::handleSessionState(const QVariantMap &data)
+{
+    // Document-scoped pins: a session document's pins replace the persistent
+    // list while its source is open; a state without pins clears the overlay.
+    // The reply echoes the source, so rapid switches stay attributable
+    // without request-id bookkeeping on the client.
+    const QString sourceID = data.value(QStringLiteral("source_id")).toString();
+    if (sourceID.isEmpty())
+        return;
+
+    PinStore document;
+    for (const QVariant &value : data.value(QStringLiteral("pins")).toList()) {
+        const PinRecord pin = PinStore::fromSessionPin(value.toMap());
+        if (pin.isValid())
+            document.upsert(pin);
+    }
+
+    if (document.count() > 0)
+        m_documentPins.insert(sourceID, document);
+    else
+        m_documentPins.remove(sourceID);
+    if (sourceID == m_currentSourceID)
+        emit pinsChanged();
 }
 
 void SessionController::selectTreeFilter(const QString &nodeId)
@@ -872,7 +1243,21 @@ void SessionController::handleResponse(const QString &command, const QVariantMap
         return;
     }
 
+    if (command == QStringLiteral("file.session_state")) {
+        // Document-scoped pins ride the source echo in the reply, so out-of-
+        // order replies after rapid source switches stay attributable.
+        handleSessionState(data);
+        return;
+    }
+
     if (command == QStringLiteral("source.close")) {
+        // Closed sources lose their document overlay (upstream: closing the
+        // session document restores the persistent pin list).
+        const QString closedSource = data.value(QStringLiteral("source_id")).toString();
+        if (!closedSource.isEmpty() && m_documentPins.remove(closedSource)
+            && closedSource == m_currentSourceID) {
+            emit pinsChanged();
+        }
         refreshSources();
         return;
     }
