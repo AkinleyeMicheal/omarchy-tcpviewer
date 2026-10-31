@@ -43,6 +43,17 @@ ApplicationWindow {
     Action { id: endpointsStatsAction; shortcut: "Ctrl+Shift+S"; onTriggered: statsWindow.openAndRaise() }
     Action { id: openDiffAction; shortcut: "Ctrl+Alt+Y"; onTriggered: diffWindow.openAndRaise() }
     Action { id: addSelectedDiffAction; shortcut: "Ctrl+Y"; onTriggered: window.addSelectedToDiff() }
+    // Upstream ⌘C on the table copies the selected rows as CSV; text fields
+    // keep their own copy shortcut when they hold focus.
+    Action {
+        id: copyRowsAction
+        shortcut: "Ctrl+C"
+        enabled: {
+            const item = window.activeFocusItem
+            return item && !(item instanceof TextInput || item instanceof TextArea)
+        }
+        onTriggered: window.copySelection()
+    }
 
     menuBar: MenuBar {
         id: menuBar
@@ -760,8 +771,37 @@ ApplicationWindow {
     readonly property string benchView: bench.view
     readonly property bool benchFollowIds: bench.follow
 
-    function openContextMenu(index, globalX, globalY) {
-        rowContextMenu.openFor(index, globalX, globalY)
+    function openContextMenu(index, globalX, globalY, columnID) {
+        rowContextMenu.openFor(index, globalX, globalY, columnID)
+    }
+
+    // Copy the table row the row menu is targeting (single selection in this
+    // pane; upstream multi-select collapses the same way).
+    function copyMenuRow(format) {
+        if (rowContextMenu.pendingRow < 0)
+            return
+        const row = session.packets.rowSnapshotAt(rowContextMenu.pendingRow)
+        session.copyPlainText(copyFormatter.rows([row], format))
+    }
+
+    function copyMenuCell() {
+        if (rowContextMenu.pendingRow < 0 || rowContextMenu.pendingColumnID === "")
+            return
+        const columns = session.columnLayout.columns
+        let column = null
+        for (let i = 0; i < columns.length; ++i) {
+            if (columns[i].id === rowContextMenu.pendingColumnID) {
+                column = columns[i]
+                break
+            }
+        }
+        if (column === null)
+            return
+        const row = session.packets.rowSnapshotAt(rowContextMenu.pendingRow)
+        const value = column.custom
+            ? session.customColumns.value(rowContextMenu.pendingColumnID, String(row.packetId ?? ""))
+            : copyFormatter.cellFor(row, column, "")
+        session.copyPlainText(copyFormatter.cells([value]))
     }
 
     function fileDialogPath(file) {
@@ -783,6 +823,17 @@ ApplicationWindow {
         diffWindow.openAndRaise()
     }
 
+    // Keyboard copy (upstream ⌘C on the table): the selected packet rows as
+    // CSV (single-selection panes copy that one row).
+    function copySelection() {
+        if (session.selectedPacketID === "")
+            return
+        const row = session.packets.rowForPacketID(session.selectedPacketID)
+        if (row < 0)
+            return
+        session.copyPlainText(copyFormatter.rows([session.packets.rowSnapshotAt(row)], "csv"))
+    }
+
     function openCaptureDialog() {
         openDialog.open()
     }
@@ -790,6 +841,11 @@ ApplicationWindow {
     // Follow Stream -------------------------------------------------------------
     FollowSessionController {
         id: follow
+    }
+
+    // Copy row/cell formats (upstream PacketTableCopyFormatter).
+    PacketCopyFormatter {
+        id: copyFormatter
     }
 
     FollowStreamWindow {
@@ -814,6 +870,9 @@ ApplicationWindow {
         id: rowContextMenu
         property int pendingRow: -1
         property string pendingProtocol: ""
+        // Column of the right-click, for Copy Cell Value (empty when the
+        // click was outside a column cell).
+        property string pendingColumnID: ""
 
         // Annotation state of the pending row; empty when no row context exists.
         readonly property string pendingPacketID: pendingRow >= 0
@@ -826,10 +885,57 @@ ApplicationWindow {
             && (session.savedMode
                 || (session.currentSourceID !== "" && !session.loading))
 
-        function openFor(index, globalX, globalY) {
+        function openFor(index, globalX, globalY, columnID) {
             pendingRow = index
+            pendingColumnID = columnID ?? ""
             pendingProtocol = String(session.packets.protocolAt(index)).toUpperCase()
             popup(globalX, globalY)
+        }
+
+        // Copy section first, matching upstream PacketTableContextMenuController.
+        MenuItem {
+            text: "Copy"
+            enabled: rowContextMenu.pendingRow >= 0
+            onTriggered: window.copyMenuRow("csv")
+        }
+
+        MenuItem {
+            text: "Copy Cell Value"
+            enabled: rowContextMenu.pendingRow >= 0
+                && rowContextMenu.pendingColumnID !== ""
+            onTriggered: window.copyMenuCell()
+        }
+
+        Menu {
+            title: "Copy Rows As"
+            enabled: rowContextMenu.pendingRow >= 0
+
+            MenuItem {
+                text: "Plain text"
+                onTriggered: window.copyMenuRow("plainText")
+            }
+            MenuItem {
+                text: "JSON"
+                onTriggered: window.copyMenuRow("json")
+            }
+            MenuSeparator {}
+            MenuItem {
+                text: "Markdown Table"
+                onTriggered: window.copyMenuRow("markdownTable")
+            }
+            MenuSeparator {}
+            MenuItem {
+                text: "CSV"
+                onTriggered: window.copyMenuRow("csv")
+            }
+            MenuItem {
+                text: "CSV with Header"
+                onTriggered: window.copyMenuRow("csvWithHeader")
+            }
+        }
+
+        MenuSeparator {
+            visible: !session.savedMode
         }
 
         MenuItem {
@@ -1287,10 +1393,10 @@ ApplicationWindow {
                                 return
                             workspace.presentPacket(controller.packets.packetIDAt(index))
                         }
-                        onRowContextClicked: function(index, globalX, globalY) {
+                        onRowContextClicked: function(index, globalX, globalY, columnID) {
                             if (window.benchEnabled)
                                 return
-                            window.openContextMenu(index, globalX, globalY)
+                            window.openContextMenu(index, globalX, globalY, columnID)
                         }
                     }
 

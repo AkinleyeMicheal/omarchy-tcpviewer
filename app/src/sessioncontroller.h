@@ -203,6 +203,8 @@ public:
     Q_INVOKABLE void revealPacket(const QString &packetID);
     Q_INVOKABLE void clearSelection();
     Q_INVOKABLE void clearError();
+    // Replaces the clipboard with UTF-8 text (copy row/cell formats).
+    Q_INVOKABLE void copyPlainText(const QString &text);
     // Create a packet-table column from a protocol detail field. The sample
     // value belongs to the packet the user right-clicked in the inspector.
     Q_INVOKABLE QString createCustomColumn(const QString &fieldName, const QString &title,

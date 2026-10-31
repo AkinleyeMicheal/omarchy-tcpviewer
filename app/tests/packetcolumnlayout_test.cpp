@@ -17,6 +17,31 @@ bool menuEntryVisible(const PacketColumnLayout &layout, const QString &identifie
     return false;
 }
 
+// Writes a settings file whose persisted order puts Comment first — a
+// malformed layout the loader must correct (Comment pinned last).
+QString settingsWithReorderedComment(const QTemporaryDir &directory)
+{
+    const QString settings = directory.filePath(QStringLiteral("reordered.ini"));
+    QSettings store(settings, QSettings::IniFormat);
+    store.setValue(QStringLiteral("packetTable/columnLayout"),
+                   QStringLiteral(
+                       "{\"version\":1,\"columns\":["
+                       "{\"identifier\":\"comment\",\"visible\":true,\"width\":220},"
+                       "{\"identifier\":\"number\",\"visible\":true,\"width\":60},"
+                       "{\"identifier\":\"summary\",\"visible\":true,\"width\":180}]}"));
+    store.sync();
+    return settings;
+}
+
+QStringList columnIDs(const PacketColumnLayout &layout)
+{
+    QStringList identifiers;
+    const QVariantList columns = layout.columns();
+    for (const QVariant &value : columns)
+        identifiers.append(value.toMap().value(QStringLiteral("id")).toString());
+    return identifiers;
+}
+
 } // namespace
 
 class PacketColumnLayoutTest : public QObject
@@ -29,6 +54,8 @@ private slots:
     void cannotHideTheLastVisibleColumn();
     void persistsVisibilityWidthsAndCustomColumns();
     void ignoresMalformedSettings();
+    void reordersVisibleColumnsAndPersistsOrder();
+    void keepsCommentPinnedLast();
 };
 
 void PacketColumnLayoutTest::defaultsAndLimits()
@@ -137,6 +164,81 @@ void PacketColumnLayoutTest::ignoresMalformedSettings()
     PacketColumnLayout layout(nullptr, settings);
     QCOMPARE(layout.visibleCount(), 10);
     QVERIFY(layout.customColumns().isEmpty());
+}
+
+void PacketColumnLayoutTest::reordersVisibleColumnsAndPersistsOrder()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString settings = directory.filePath(QStringLiteral("settings.ini"));
+
+    {
+        PacketColumnLayout layout(nullptr, settings);
+        QCOMPARE(columnIDs(layout).first(), QStringLiteral("number"));
+        QCOMPARE(columnIDs(layout).last(), QStringLiteral("comment"));
+
+        // Drag Summary to the front (upstream NSTableView column drag).
+        QVERIFY(layout.moveColumn(QStringLiteral("summary"), 0));
+        QCOMPARE(columnIDs(layout).first(), QStringLiteral("summary"));
+        QCOMPARE(layout.visibleCount(), 10);
+
+        // Moving into the same boundary is a no-op.
+        QVERIFY(!layout.moveColumn(QStringLiteral("summary"), 0));
+        QCOMPARE(columnIDs(layout).first(), QStringLiteral("summary"));
+
+        // Out-of-range boundary and unknown identifiers are rejected.
+        QVERIFY(!layout.moveColumn(QStringLiteral("summary"), 12));
+        QVERIFY(!layout.moveColumn(QStringLiteral("missing"), 0));
+        // Hidden columns cannot be dragged.
+        QVERIFY(!layout.moveColumn(QStringLiteral("sourcePort"), 0));
+
+        // Enable Source Port (lands at its catalog slot among visible
+        // columns), drag it to the end — right before Comment.
+        QVERIFY(layout.toggleColumn(QStringLiteral("sourcePort")));
+        QCOMPARE(columnIDs(layout).indexOf(QStringLiteral("sourcePort")), 4);
+        QCOMPARE(columnIDs(layout).last(), QStringLiteral("comment"));
+        QVERIFY(layout.moveColumn(QStringLiteral("sourcePort"), 9));
+        QCOMPARE(columnIDs(layout).last(), QStringLiteral("comment"));
+        QCOMPARE(columnIDs(layout).at(columnIDs(layout).size() - 2),
+                 QStringLiteral("sourcePort"));
+    }
+
+    // The order itself persists across restarts (upstream saves the table's
+    // column order in the layout store).
+    PacketColumnLayout restored(nullptr, settings);
+    QCOMPARE(columnIDs(restored).first(), QStringLiteral("summary"));
+    QCOMPARE(columnIDs(restored).last(), QStringLiteral("comment"));
+    QCOMPARE(restored.columnWidth(QStringLiteral("summary")), 320);
+
+    // Reset restores the catalog order.
+    restored.resetColumns();
+    QCOMPARE(columnIDs(restored).first(), QStringLiteral("number"));
+}
+
+void PacketColumnLayoutTest::keepsCommentPinnedLast()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    PacketColumnLayout layout(nullptr, settingsWithReorderedComment(directory));
+
+    // A saved layout that tries to move Comment elsewhere is corrected.
+    QCOMPARE(columnIDs(layout).last(), QStringLiteral("comment"));
+    // Comment cannot be dragged and nothing drops behind it.
+    QVERIFY(!layout.moveColumn(QStringLiteral("comment"), 0));
+    QVERIFY(!layout.moveColumn(QStringLiteral("number"), 12));
+    QCOMPARE(columnIDs(layout).last(), QStringLiteral("comment"));
+
+    // Custom columns are created before the trailing Comment column
+    // (upstream setCustomColumns).
+    const QString custom = layout.createCustomColumn(
+        QStringLiteral("tcp.flag.syn"), QStringLiteral("SYN"));
+    QVERIFY(!custom.isEmpty());
+    QCOMPARE(columnIDs(layout).last(), QStringLiteral("comment"));
+    QCOMPARE(columnIDs(layout).at(columnIDs(layout).size() - 2), custom);
+    QVERIFY(layout.removeCustomColumn(custom));
+    const QStringList identifiers = columnIDs(layout);
+    QVERIFY(!identifiers.contains(custom));
+    QCOMPARE(identifiers.last(), QStringLiteral("comment"));
 }
 
 QTEST_GUILESS_MAIN(PacketColumnLayoutTest)

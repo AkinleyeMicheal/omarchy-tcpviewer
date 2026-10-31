@@ -17,7 +17,7 @@ Item {
 
     signal rowClicked(int index)
     signal rowActivated(int index)
-    signal rowContextClicked(int index, real globalX, real globalY)
+    signal rowContextClicked(int index, real globalX, real globalY, string columnID)
 
     readonly property var columns: columnLayout.columns
     readonly property int customRevision: customColumns.revision
@@ -37,6 +37,56 @@ Item {
         if (index === columns.length - 1)
             return Math.max(column.width, width - offsets[index])
         return column.width
+    }
+
+    // Header drag-reorder state (dropIndicator + headers read these).
+    property string dragColumnID: ""
+    property real dragOffsetX: 0
+    property real dropX: 0
+    property int dropSlot: -1
+    readonly property bool dragActive: dragColumnID !== ""
+
+    function beginColumnDrag(columnID) {
+        dragColumnID = columnID
+        dropSlot = -1
+        dropX = 0
+    }
+
+    function updateColumnDrag(draggedIndex, grabX, mouseLocalX) {
+        dragOffsetX = mouseLocalX - grabX
+        // Pointer position in content space, then a boundary slot among the
+        // other movable columns by their midpoints (insert-before rule).
+        const pointerContentX = offsets[draggedIndex] + mouseLocalX
+        var others = []
+        for (var i = 0; i < columns.length; ++i) {
+            if (i === draggedIndex || columns[i].id === "comment")
+                continue
+            others.push(i)
+        }
+        var slot = others.length
+        for (var j = 0; j < others.length; ++j) {
+            var midpoint = offsets[others[j]] + cellWidth(others[j]) / 2
+            if (pointerContentX < midpoint) {
+                slot = j
+                break
+            }
+        }
+        dropSlot = slot
+        dropX = slot < others.length
+            ? offsets[others[slot]]
+            : (offsets[others[others.length - 1]] + cellWidth(others[others.length - 1]))
+    }
+
+    function finishColumnDrag() {
+        if (dragColumnID !== "" && dropSlot >= 0) {
+            // moveColumn persists and emits columnsChanged; the offsets and
+            // header repeater rebuild from the new order.
+            columnLayout.moveColumn(dragColumnID, dropSlot)
+        }
+        dragColumnID = ""
+        dragOffsetX = 0
+        dropSlot = -1
+        dropX = 0
     }
 
     function readRole(item, role) {
@@ -84,6 +134,19 @@ Item {
         color: Theme.headerBackground
         clip: true
 
+        // Drop indicator for a header drag (upstream NSTableView column
+        // dragging): a 2 px insertion line at the candidate boundary.
+        Rectangle {
+            id: dropIndicator
+            visible: root.dragActive
+            height: parent.height - 6
+            anchors.verticalCenter: parent.verticalCenter
+            width: 2
+            radius: 1
+            color: Theme.accent
+            x: root.dropX - table.contentX
+        }
+
         // Header context menu (upstream PacketTableColumnVisibilityMenuController).
         MouseArea {
             anchors.fill: parent
@@ -98,6 +161,8 @@ Item {
         Repeater {
             model: root.columns
             delegate: Item {
+                id: headerCell
+
                 required property int index
                 required property var modelData
                 // Track the body's horizontal scroll: when the TableView pans
@@ -107,18 +172,24 @@ Item {
                 width: root.cellWidth(index)
                 height: header.height
 
+                // While this column is dragged, the pointer offsets it and
+                // the drop line shows the candidate boundary.
+                readonly property bool dragging: root.dragColumnID === modelData.id
+                readonly property real dragOffset: dragging ? root.dragOffsetX : 0
+
                 Text {
                     anchors.fill: parent
-                    anchors.leftMargin: 5
+                    anchors.leftMargin: 5 + headerCell.dragOffset
                     anchors.rightMargin: 4
                     verticalAlignment: Text.AlignVCenter
                     elide: Text.ElideRight
                     text: modelData.title
                     textFormat: Text.PlainText
-                    color: Theme.secondaryLabel
+                    color: headerCell.dragging ? Theme.accent : Theme.secondaryLabel
                     font.family: Theme.uiFont
                     font.pixelSize: Theme.uiSmall
                     font.weight: Font.DemiBold
+                    opacity: headerCell.dragging ? 0.85 : 1
                 }
 
                 Rectangle {
@@ -129,6 +200,30 @@ Item {
                     color: Theme.separator
                 }
 
+                // Drag the header to reorder (upstream native column drag);
+                // drag the divider to resize; the layout persists both. The
+                // trailing Comment column is not movable.
+                MouseArea {
+                    id: headerDrag
+                    anchors.fill: parent
+                    cursorShape: Qt.DragMoveCursor
+                    acceptedButtons: Qt.LeftButton
+                    enabled: headerCell.modelData.id !== "comment"
+
+                    property real grabX: 0
+
+                    onPressed: (mouse) => {
+                        grabX = mouse.x
+                        root.beginColumnDrag(headerCell.modelData.id)
+                    }
+                    onPositionChanged: (mouse) => {
+                        if (pressed && root.dragColumnID === headerCell.modelData.id)
+                            root.updateColumnDrag(headerCell.index, grabX, mouse.x)
+                    }
+                    onReleased: root.finishColumnDrag()
+                    onCanceled: root.finishColumnDrag()
+                }
+
                 // Drag the divider to resize; the layout persists the width.
                 MouseArea {
                     anchors.right: parent.right
@@ -137,6 +232,8 @@ Item {
                     width: 5
                     cursorShape: Qt.SplitHCursor
                     acceptedButtons: Qt.LeftButton
+                    enabled: !headerCell.dragging
+                    z: 2
                     property real startWidth: 0
 
                     onPressed: startWidth = modelData.width
@@ -277,7 +374,8 @@ Item {
                     if (mouse.button === Qt.RightButton) {
                         root.selectedIndex = cell.row
                         mouse.accepted = true
-                        root.rowContextClicked(cell.row, mouse.globalX, mouse.globalY)
+                        root.rowContextClicked(cell.row, mouse.globalX, mouse.globalY,
+                            cell.columnData ? cell.columnData.id : "")
                     }
                 }
                 onClicked: (mouse) => {

@@ -490,6 +490,13 @@ void SessionController::clearPackets()
                     {QStringLiteral("yes"), true}});
 }
 
+void SessionController::copyPlainText(const QString &text)
+{
+    if (text.isEmpty())
+        return;
+    QGuiApplication::clipboard()->setText(text);
+}
+
 // MARK: - Packet annotations
 
 void SessionController::setPacketHighlightColor(const QString &packetID, const QString &colorName)

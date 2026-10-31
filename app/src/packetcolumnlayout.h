@@ -3,6 +3,7 @@
 #include <QHash>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QVariantList>
 #include <QVector>
 #include <QtQml/qqmlregistration.h>
@@ -31,6 +32,10 @@ public:
 
     Q_INVOKABLE bool toggleColumn(const QString &identifier);
     Q_INVOKABLE bool setColumnVisible(const QString &identifier, bool visible);
+    // Visual reordering (upstream NSTableView column drag): visibleIndex is
+    // the insertion slot among the other visible columns; the Comment column
+    // stays pinned last and cannot be moved.
+    Q_INVOKABLE bool moveColumn(const QString &identifier, int visibleIndex);
     Q_INVOKABLE void resetColumns();
     Q_INVOKABLE bool setColumnWidth(const QString &identifier, int width);
     Q_INVOKABLE int columnWidth(const QString &identifier) const;
@@ -69,8 +74,10 @@ private:
     void load();
     void save() const;
     void emitChanged();
+    void rebuildOrder(const QStringList &loadedOrder);
 
     QVector<Definition> m_definitions;
+    QStringList m_order;
     QHash<QString, bool> m_visibility;
     QHash<QString, int> m_widths;
     QString m_settingsFile;

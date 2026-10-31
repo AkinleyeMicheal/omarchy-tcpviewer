@@ -45,7 +45,9 @@ PacketColumnLayout::PacketColumnLayout(QObject *parent, const QString &settingsF
     , m_settingsFile(settingsFile)
 {
     m_definitions = defaultDefinitions();
+    m_order.reserve(m_definitions.size());
     for (const Definition &definition : m_definitions) {
+        m_order.append(definition.identifier);
         m_visibility.insert(definition.identifier, definition.defaultVisible);
         m_widths.insert(definition.identifier, definition.defaultWidth);
     }
@@ -83,10 +85,16 @@ QVector<PacketColumnLayout::Definition> PacketColumnLayout::defaultDefinitions()
 
 QVariantList PacketColumnLayout::columns() const
 {
+    // Visual order: the persisted column order (comment pinned last), only
+    // visible columns.
     QVariantList result;
-    for (const Definition &definition : m_definitions) {
-        if (!isVisible(definition.identifier))
+    for (const QString &identifier : m_order) {
+        if (!isVisible(identifier))
             continue;
+        const int index = indexOf(identifier);
+        if (index < 0)
+            continue;
+        const Definition &definition = m_definitions.at(index);
         result.append(QVariantMap{
             {QStringLiteral("id"), definition.identifier},
             {QStringLiteral("title"), definition.title},
@@ -160,12 +168,64 @@ bool PacketColumnLayout::setColumnVisible(const QString &identifier, bool visibl
 
 void PacketColumnLayout::resetColumns()
 {
+    m_order.clear();
+    for (const Definition &definition : m_definitions)
+        m_order.append(definition.identifier);
     for (const Definition &definition : m_definitions) {
         m_visibility.insert(definition.identifier, definition.defaultVisible);
         m_widths.insert(definition.identifier, definition.defaultWidth);
     }
     save();
     emitChanged();
+}
+
+bool PacketColumnLayout::moveColumn(const QString &identifier, int visibleIndex)
+{
+    // Upstream pins the Comment column last (shouldReorderColumn), so it can
+    // never be dragged and nothing is inserted behind it.
+    if (identifier == QStringLiteral("comment") || visibleIndex < 0)
+        return false;
+    if (indexOf(identifier) < 0 || !isVisible(identifier))
+        return false;
+
+    QStringList others;
+    int from = -1;
+    for (const QString &existing : m_order) {
+        if (existing == identifier) {
+            from = others.size();
+            continue;
+        }
+        if (existing == QStringLiteral("comment"))
+            continue;
+        if (isVisible(existing))
+            others.append(existing);
+    }
+    if (from < 0 || visibleIndex > others.size())
+        return false;
+    // Inserting at the same boundary is a no-op (no visible change).
+    if (from == visibleIndex)
+        return false;
+    others.insert(visibleIndex, identifier);
+
+    // Write the list back into the order slots that hold visible columns;
+    // hidden entries keep their relative positions and Comment stays last.
+    QStringList next;
+    auto cursor = others.constBegin();
+    for (const QString &existing : m_order) {
+        if (existing == QStringLiteral("comment"))
+            continue;
+        if (isVisible(existing)) {
+            if (cursor != others.constEnd())
+                next.append(*cursor++);
+            continue;
+        }
+        next.append(existing);
+    }
+    next.append(QStringLiteral("comment"));
+    m_order = next;
+    save();
+    emitChanged();
+    return true;
 }
 
 bool PacketColumnLayout::setColumnWidth(const QString &identifier, int width)
@@ -249,6 +309,13 @@ QString PacketColumnLayout::createCustomColumn(const QString &fieldName, const Q
     m_definitions.append(definition);
     m_visibility.insert(identifier, true);
     m_widths.insert(identifier, defaultCustomWidth);
+    // Upstream setCustomColumns keeps custom columns before the trailing
+    // Comment column.
+    const int commentSlot = m_order.indexOf(QStringLiteral("comment"));
+    if (commentSlot >= 0)
+        m_order.insert(commentSlot, identifier);
+    else
+        m_order.append(identifier);
     save();
     emit columnsChanged();
     emit customColumnsChanged();
@@ -261,6 +328,7 @@ bool PacketColumnLayout::removeCustomColumn(const QString &identifier)
     if (index < 0 || !m_definitions.at(index).custom)
         return false;
     m_definitions.removeAt(index);
+    m_order.removeOne(identifier);
     m_visibility.remove(identifier);
     m_widths.remove(identifier);
     save();
@@ -358,24 +426,8 @@ void PacketColumnLayout::load()
     if (root.value(QStringLiteral("version")).toInt() != 1)
         return;
 
-    const QJsonArray columns = root.value(QStringLiteral("columns")).toArray();
-    for (const QJsonValue &value : columns) {
-        if (!value.isObject())
-            continue;
-        const QJsonObject column = value.toObject();
-        const QString identifier = column.value(QStringLiteral("identifier")).toString();
-        const int index = indexOf(identifier);
-        if (index < 0)
-            continue;
-        const Definition &definition = m_definitions.at(index);
-        if (column.value(QStringLiteral("visible")).isBool() && definition.canHide)
-            m_visibility.insert(identifier, column.value(QStringLiteral("visible")).toBool());
-        if (column.value(QStringLiteral("width")).isDouble()) {
-            m_widths.insert(identifier, clampedWidth(
-                int(column.value(QStringLiteral("width")).toDouble()), definition.minimumWidth));
-        }
-    }
-
+    // Custom column definitions load first so the ordered columns array can
+    // reference them just like the built-ins.
     const QJsonArray custom = root.value(QStringLiteral("customColumns")).toArray();
     QSet<QString> seenFields;
     int added = 0;
@@ -412,6 +464,29 @@ void PacketColumnLayout::load()
         ++added;
     }
 
+    // The persisted columns array is the visual order (upstream restores
+    // positions from the same array), not just decoration.
+    const QJsonArray columns = root.value(QStringLiteral("columns")).toArray();
+    QStringList loadedOrder;
+    for (const QJsonValue &value : columns) {
+        if (!value.isObject())
+            continue;
+        const QJsonObject column = value.toObject();
+        const QString identifier = column.value(QStringLiteral("identifier")).toString();
+        if (indexOf(identifier) < 0 || loadedOrder.contains(identifier))
+            continue;
+        loadedOrder.append(identifier);
+        const Definition &definition = m_definitions.at(indexOf(identifier));
+        if (column.value(QStringLiteral("visible")).isBool() && definition.canHide)
+            m_visibility.insert(identifier, column.value(QStringLiteral("visible")).toBool());
+        if (column.value(QStringLiteral("width")).isDouble()) {
+            m_widths.insert(identifier, clampedWidth(
+                int(column.value(QStringLiteral("width")).toDouble()), definition.minimumWidth));
+        }
+    }
+
+    rebuildOrder(loadedOrder);
+
     if (visibleCountInternal() == 0) {
         for (const Definition &definition : m_definitions) {
             if (definition.defaultVisible) {
@@ -422,10 +497,41 @@ void PacketColumnLayout::load()
     }
 }
 
+// Apply a persisted partial order: known identifiers come first in their
+// saved sequence, catalog entries the layout never mentioned keep their
+// catalog positions after that, and the Comment column is pinned last.
+void PacketColumnLayout::rebuildOrder(const QStringList &loadedOrder)
+{
+    QSet<QString> ordered;
+    for (const QString &identifier : loadedOrder)
+        if (indexOf(identifier) >= 0 && identifier != QStringLiteral("comment"))
+            ordered.insert(identifier);
+
+    QStringList next;
+    for (const QString &identifier : loadedOrder) {
+        if (ordered.remove(identifier))
+            next.append(identifier);
+    }
+    for (const Definition &definition : m_definitions) {
+        if (ordered.contains(definition.identifier)) {
+            next.append(definition.identifier);
+            ordered.remove(definition.identifier);
+        }
+    }
+    next.append(QStringLiteral("comment"));
+    m_order = next;
+}
+
 void PacketColumnLayout::save() const
 {
+    // The columns array is the visual order (upstream writes the table's
+    // column order back the same way).
     QJsonArray columns;
-    for (const Definition &definition : m_definitions) {
+    for (const QString &identifier : m_order) {
+        const int index = indexOf(identifier);
+        if (index < 0)
+            continue;
+        const Definition &definition = m_definitions.at(index);
         columns.append(QJsonObject{
             {QStringLiteral("identifier"), definition.identifier},
             {QStringLiteral("visible"), isVisible(definition.identifier)},

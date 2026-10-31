@@ -183,7 +183,13 @@ page header.
 - `Ctrl+K` clears packets, `Ctrl+B` toggles the sidebar, `Ctrl+Shift+I` the
   inspector, and `Ctrl+Shift+S` opens endpoint statistics.
 - The header row's right-click menu shows/hides table columns and resets
-  widths; widths persist across launches.
+  widths; widths persist across launches. Dragging a header reorders the
+  columns (the ordered layout persists, with the Comment column pinned
+  last), and `Ctrl+C` copies the selected packet row as CSV.
+- The row context menu copies rows (**Copy**, **Copy Cell Value**, and
+  **Copy Rows As** — Plain text, JSON, Markdown Table, CSV, CSV with
+  Header) with a fixed field set that follows the visible selection, and it
+  pins/saves packets next to the diff actions like the upstream menu.
 - Right-clicking a protocol-detail row in the inspector offers
   **Create Column**, adding a bounded table column backed by that field.
 

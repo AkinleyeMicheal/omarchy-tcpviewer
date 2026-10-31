@@ -26,6 +26,7 @@ qt_add_executable(omarchy-tcpviewer
     src/packetinspector.cpp
     src/pinstore.cpp
     src/savedpacketstore.cpp
+    src/packetcopyformatter.cpp
     src/diffcontroller.cpp
     src/diffalgorithms.cpp
 )
@@ -119,6 +120,14 @@ if(TCPVIEWER_BUILD_TESTS)
     target_include_directories(packetcolumnlayout_test PRIVATE src)
     target_link_libraries(packetcolumnlayout_test PRIVATE Qt6::Test Qt6::Qml)
     add_test(NAME packetcolumnlayout COMMAND packetcolumnlayout_test)
+
+    qt_add_executable(packetcopyformatter_test
+        tests/packetcopyformatter_test.cpp
+        src/packetcopyformatter.cpp
+    )
+    target_include_directories(packetcopyformatter_test PRIVATE src)
+    target_link_libraries(packetcopyformatter_test PRIVATE Qt6::Test Qt6::Qml)
+    add_test(NAME packetcopyformatter COMMAND packetcopyformatter_test)
 
     qt_add_executable(sourcetreemodel_test
         tests/sourcetreemodel_test.cpp
