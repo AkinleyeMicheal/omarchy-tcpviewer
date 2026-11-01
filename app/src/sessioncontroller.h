@@ -76,6 +76,8 @@ class SessionController : public QObject
     Q_PROPERTY(bool savedMode READ savedMode NOTIFY savedModeChanged)
     Q_PROPERTY(int savedCount READ savedCount NOTIFY savedPacketsChanged)
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorTextChanged)
+    // Screenshot/bench fixture only: comma-list of table rows to preselect.
+    Q_PROPERTY(QString seededRows READ seededRows CONSTANT)
     Q_PROPERTY(bool loading READ loading NOTIFY loadingChanged)
     // True while an import chain is in flight (gates the Cancel button).
     Q_PROPERTY(bool importing READ importing NOTIFY sourcesChanged)
@@ -129,6 +131,7 @@ public:
     bool savedMode() const { return m_savedMode; }
     int savedCount() const { return m_savedStore.count(); }
     QString errorText() const { return m_errorText; }
+    QString seededRows() const { return qEnvironmentVariable("TCPVIEWER_SELECT_ROWS"); }
     // Loading state: explicit setLoading() calls OR an import chain in
     // flight (packet pages of an auto-selected file would otherwise clear
     // m_loading mid-chain and hide the cancel affordance).
@@ -210,7 +213,13 @@ public:
     Q_INVOKABLE QString createCustomColumn(const QString &fieldName, const QString &title,
                                            const QString &sampleValue, const QString &packetID);
     Q_INVOKABLE void exportAll(const QString &path, const QString &format);
-    Q_INVOKABLE void exportSelected(const QString &path, const QString &format);
+    // Export one packet-id list built by the UI (selected/clicked rows).
+    Q_INVOKABLE void exportPackets(const QString &path, const QString &format,
+                                   const QVariantList &packetIDs);
+    // Export a sidebar scope (app:<key>, domain:<d>, ip:<ip>); file sources
+    // reuse exportAll since the loaded set belongs to the current source.
+    Q_INVOKABLE void exportGroup(const QString &path, const QString &format,
+                                 const QString &nodeID);
     Q_INVOKABLE void exportSession(const QString &path);
     Q_INVOKABLE void requestOverview();
     // Overview card picker persistence (upstream TCPViewer.overview.cards).

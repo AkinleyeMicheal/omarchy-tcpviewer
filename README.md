@@ -190,6 +190,9 @@ page header.
   **Copy Rows As** — Plain text, JSON, Markdown Table, CSV, CSV with
   Header) with a fixed field set that follows the visible selection, and it
   pins/saves packets next to the diff actions like the upstream menu.
+  Ctrl/Shift+click builds a multi-selection that the menu (copy and
+  **Export ▸ as pcap/pcapng**) targets as a whole; sidebar app, domain, and
+  IP rows — and their Pinned equivalents — export their scope the same way.
 - Right-clicking a protocol-detail row in the inspector offers
   **Create Column**, adding a bounded table column backed by that field.
 

@@ -54,6 +54,7 @@ private slots:
     void countOnlyRefreshDoesNotReset();
     void resetClearsTree();
     void textFilterPreservesAncestors();
+    void exportScopeCollectsPacketIDs();
 };
 
 void SourceTreeModelTest::countsAndHierarchy()
@@ -207,6 +208,45 @@ void SourceTreeModelTest::packetModelFiltering()
     model.clearTreeFilter();
     QCOMPARE(model.count(), 5);
     QCOMPARE(model.packetIDAt(4), QStringLiteral("5"));
+}
+
+void SourceTreeModelTest::exportScopeCollectsPacketIDs()
+{
+    PacketListModel model;
+    model.appendRows({
+        makeRow(1, QStringLiteral("curl"), QStringLiteral("/usr/bin/curl"),
+                QStringLiteral("example.com"), QStringLiteral("10.0.0.2"), QStringLiteral("93.184.216.34")),
+        makeRow(2, QStringLiteral("curl"), QStringLiteral("/usr/bin/curl"),
+                QString(), QStringLiteral("10.0.0.2"), QStringLiteral("1.1.1.1")),
+        makeRow(3, QStringLiteral("firefox"), QStringLiteral("/usr/bin/firefox"),
+                QString(), QStringLiteral("10.0.0.2"), QStringLiteral("8.8.8.8")),
+        makeRow(4, QString(), QString(),
+                QString(), QStringLiteral("10.0.0.2"), QStringLiteral("9.9.9.9")),
+    });
+
+    // Scope matching mirrors countForPin / the tree's appKey/domain/ip rules.
+    QCOMPARE(model.packetIDsForScope(QStringLiteral("domain"),
+             QStringLiteral("example.com"), 100),
+             QVariantList{QStringLiteral("1")});
+    QCOMPARE(model.packetIDsForScope(QStringLiteral("domain"), {}, 100).size(), 3);
+    QCOMPARE(model.packetIDsForScope(QStringLiteral("client"),
+             QStringLiteral("/usr/bin/curl"), 100),
+             (QVariantList{QStringLiteral("1"), QStringLiteral("2")}));
+    // IP buckets only hold no-domain packets (upstream rule).
+    QCOMPARE(model.packetIDsForScope(QStringLiteral("ip"), QStringLiteral("1.1.1.1"), 100),
+             QVariantList{QStringLiteral("2")});
+    QCOMPARE(model.packetIDsForScope(QStringLiteral("ip"), QStringLiteral("9.9.9.9"), 100),
+             QVariantList{QStringLiteral("4")});
+
+    // The All scope collects in packet order and respects the selector cap.
+    QCOMPARE(model.packetIDsForScope(QStringLiteral("all"), {}, 100).size(), 4);
+    const QVariantList capped = model.packetIDsForScope(QStringLiteral("all"), {}, 2);
+    QCOMPARE(capped.size(), 2);
+    QCOMPARE(capped.first(), QStringLiteral("1"));
+
+    // Unknown scopes and invalid caps collect nothing.
+    QVERIFY(model.packetIDsForScope(QStringLiteral("folder"), QStringLiteral("apps"), 100).isEmpty());
+    QVERIFY(model.packetIDsForScope(QStringLiteral("all"), {}, 0).isEmpty());
 }
 
 void SourceTreeModelTest::countOnlyRefreshDoesNotReset()

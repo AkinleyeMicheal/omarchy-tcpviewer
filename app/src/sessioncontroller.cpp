@@ -1565,14 +1565,21 @@ void SessionController::exportAll(const QString &path, const QString &format)
     }, 300);
 }
 
-void SessionController::exportSelected(const QString &path, const QString &format)
+void SessionController::exportPackets(const QString &path, const QString &format,
+                                      const QVariantList &packetIDs)
 {
     if (!m_client->connected() || m_currentSourceID.isEmpty() || path.isEmpty()
-        || m_selectedPacketID.isEmpty()) {
+        || packetIDs.isEmpty()) {
         return;
     }
     if (format != QStringLiteral("pcap") && format != QStringLiteral("pcapng")) {
         setError(QStringLiteral("Export format must be pcap or pcapng."));
+        return;
+    }
+    if (packetIDs.size() > 5'000) {
+        // The daemon selector rejects > 5000 ids; report before sending.
+        setError(QStringLiteral(
+            "A packet export is limited to 5000 packets — narrow the selection."));
         return;
     }
     setError(QString());
@@ -1581,9 +1588,49 @@ void SessionController::exportSelected(const QString &path, const QString &forma
         {QStringLiteral("source_id"), m_currentSourceID},
         {QStringLiteral("path"), path},
         {QStringLiteral("format"), format},
-        {QStringLiteral("packet_ids"), QVariantList{m_selectedPacketID}},
+        {QStringLiteral("packet_ids"), packetIDs},
         {QStringLiteral("overwrite"), true},
     }, 300);
+}
+
+void SessionController::exportGroup(const QString &path, const QString &format,
+                                    const QString &nodeID)
+{
+    if (!m_client->connected() || m_currentSourceID.isEmpty() || path.isEmpty()
+        || nodeID.isEmpty()) {
+        return;
+    }
+    if (format != QStringLiteral("pcap") && format != QStringLiteral("pcapng")) {
+        setError(QStringLiteral("Export format must be pcap or pcapng."));
+        return;
+    }
+
+    // Sidebar scopes resolve to packet ids on the loaded set (upstream maps
+    // source-list selections the same way, minus the All Packets row).
+    const int split = nodeID.indexOf(QLatin1Char(':'));
+    const QString kind = split > 0 ? nodeID.left(split) : nodeID;
+    QString scopeKind = kind;
+    if (kind == QStringLiteral("app"))
+        scopeKind = QStringLiteral("client");
+    if (scopeKind == QStringLiteral("file")) {
+        // The loaded row set belongs to whichever source is selected, so a
+        // file row exports through the whole-source path.
+        exportAll(path, format);
+        return;
+    }
+    if (scopeKind != QStringLiteral("domain") && scopeKind != QStringLiteral("ip")
+        && scopeKind != QStringLiteral("client")) {
+        setError(QStringLiteral("This sidebar row cannot be exported."));
+        return;
+    }
+
+    const QVariantList ids = m_packets->packetIDsForScope(scopeKind,
+        nodeID.mid(split + 1), 5'000);
+    if (ids.isEmpty()) {
+        setError(QStringLiteral("No packets match this scope."));
+        return;
+    }
+    exportPackets(path, format, ids);
 }
 
 void SessionController::exportSession(const QString &path)

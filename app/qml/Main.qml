@@ -616,6 +616,9 @@ ApplicationWindow {
                 if (window.captureMode !== mode)
                     window.captureMode = mode
             }
+            onExportScopeRequested: (nodeID, globalX, globalY) => {
+                window.openSidebarExportMenu(nodeID, globalX, globalY)
+            }
             visible: window.sidebarVisible
             SplitView.preferredWidth: Theme.sidebarDefaultWidth
             SplitView.minimumWidth: Theme.sidebarMinimumWidth
@@ -727,6 +730,41 @@ ApplicationWindow {
         onAccepted: session.exportSession(fileDialogPath(selectedFile))
     }
 
+    // Shared save panel for row and sidebar-scope exports (upstream
+    // presentPacketExportPanel / presentSourceListExportPanel); the open
+    // helpers set the title/suffix and route the accept by target kind.
+    FileDialog {
+        id: exportSelectionDialog
+        title: "Export as pcap"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "pcap"
+        nameFilters: ["pcap (*.pcap)", "pcapng (*.pcapng)"]
+        onAccepted: {
+            const path = fileDialogPath(selectedFile)
+            if (pendingExportNodeID !== "") {
+                session.exportGroup(path, pendingExportFormat, pendingExportNodeID)
+                return
+            }
+            session.exportPackets(path, pendingExportFormat, pendingExportPacketIDs)
+        }
+    }
+
+    // Sidebar scope export menu (upstream SidebarViewController: right-click
+    // app/domain/IP rows for Export as pcap/pcapng).
+    Menu {
+        id: sidebarExportMenu
+        property string pendingNodeID: ""
+
+        MenuItem {
+            text: "Export as pcap…"
+            onTriggered: window.exportMenuGroup("pcap")
+        }
+        MenuItem {
+            text: "Export as pcapng…"
+            onTriggered: window.exportMenuGroup("pcapng")
+        }
+    }
+
     // Drag & drop capture files (upstream registers fileURL drops on the root
     // view and routes them through the same importer as the open panel).
     // Allowed: .pcap/.pcapng/.cap now; .tcpviewsession joins with session
@@ -771,21 +809,26 @@ ApplicationWindow {
     readonly property string benchView: bench.view
     readonly property bool benchFollowIds: bench.follow
 
-    function openContextMenu(index, globalX, globalY, columnID) {
-        rowContextMenu.openFor(index, globalX, globalY, columnID)
+    function openContextMenu(index, globalX, globalY, columnID, targetRows) {
+        rowContextMenu.openFor(index, globalX, globalY, columnID, targetRows)
     }
 
-    // Copy the table row the row menu is targeting (single selection in this
-    // pane; upstream multi-select collapses the same way).
+    // Copy the rows the row menu is targeting (clicked row or the current
+    // multi-selection; upstream targetRowIndexes).
     function copyMenuRow(format) {
-        if (rowContextMenu.pendingRow < 0)
-            return
-        const row = session.packets.rowSnapshotAt(rowContextMenu.pendingRow)
-        session.copyPlainText(copyFormatter.rows([row], format))
+        const targets = rowContextMenu.pendingRows
+        const rows = []
+        for (let i = 0; i < targets.length; ++i) {
+            if (targets[i] >= session.packets.count)
+                continue
+            rows.push(session.packets.rowSnapshotAt(targets[i]))
+        }
+        session.copyPlainText(copyFormatter.rows(rows, format))
     }
 
     function copyMenuCell() {
-        if (rowContextMenu.pendingRow < 0 || rowContextMenu.pendingColumnID === "")
+        if (rowContextMenu.pendingRows.length === 0
+            || rowContextMenu.pendingColumnID === "")
             return
         const columns = session.columnLayout.columns
         let column = null
@@ -797,11 +840,68 @@ ApplicationWindow {
         }
         if (column === null)
             return
-        const row = session.packets.rowSnapshotAt(rowContextMenu.pendingRow)
-        const value = column.custom
-            ? session.customColumns.value(rowContextMenu.pendingColumnID, String(row.packetId ?? ""))
-            : copyFormatter.cellFor(row, column, "")
-        session.copyPlainText(copyFormatter.cells([value]))
+        const targets = rowContextMenu.pendingRows
+        const values = []
+        for (let i = 0; i < targets.length; ++i) {
+            if (targets[i] >= session.packets.count)
+                continue
+            const row = session.packets.rowSnapshotAt(targets[i])
+            values.push(column.custom
+                ? String(session.customColumns.value(rowContextMenu.pendingColumnID,
+                      String(row.packetId ?? "")) ?? "")
+                : copyFormatter.cellFor(row, column, ""))
+        }
+        session.copyPlainText(copyFormatter.cells(values))
+    }
+
+    // Row-menu Export ▸ (upstream exportTargetRows): write the targeted rows
+    // through the save panel; the accept handler routes by target kind.
+    property string pendingExportFormat: "pcap"
+    property var pendingExportPacketIDs: []
+    property string pendingExportNodeID: ""
+
+    function exportMenuRows(format) {
+        const targets = rowContextMenu.pendingRows
+        if (targets.length === 0)
+            return
+        const ids = []
+        for (let i = 0; i < targets.length; ++i) {
+            if (targets[i] >= session.packets.count)
+                continue
+            ids.push(String(session.packets.packetIDAt(targets[i])))
+        }
+        if (ids.length === 0)
+            return
+        pendingExportFormat = format
+        pendingExportPacketIDs = ids
+        pendingExportNodeID = ""
+        exportSelectionDialog.title = format === "pcap"
+            ? "Export as pcap" : "Export as pcapng"
+        exportSelectionDialog.defaultSuffix = format
+        exportSelectionDialog.open()
+    }
+
+    function openSidebarExportMenu(nodeID, globalX, globalY) {
+        const id = String(nodeID)
+        const split = id.indexOf(":")
+        const kind = split > 0 ? id.slice(0, split) : id
+        if (kind !== "app" && kind !== "domain" && kind !== "ip"
+            && kind !== "client")
+            return
+        sidebarExportMenu.pendingNodeID = id
+        sidebarExportMenu.popup(globalX, globalY)
+    }
+
+    function exportMenuGroup(format) {
+        if (sidebarExportMenu.pendingNodeID === "")
+            return
+        pendingExportFormat = format
+        pendingExportPacketIDs = []
+        pendingExportNodeID = sidebarExportMenu.pendingNodeID
+        exportSelectionDialog.title = format === "pcap"
+            ? "Export as pcap" : "Export as pcapng"
+        exportSelectionDialog.defaultSuffix = format
+        exportSelectionDialog.open()
     }
 
     function fileDialogPath(file) {
@@ -873,6 +973,8 @@ ApplicationWindow {
         // Column of the right-click, for Copy Cell Value (empty when the
         // click was outside a column cell).
         property string pendingColumnID: ""
+        // Target rows for copy/export (clicked row or the multi-selection).
+        property var pendingRows: []
 
         // Annotation state of the pending row; empty when no row context exists.
         readonly property string pendingPacketID: pendingRow >= 0
@@ -885,9 +987,10 @@ ApplicationWindow {
             && (session.savedMode
                 || (session.currentSourceID !== "" && !session.loading))
 
-        function openFor(index, globalX, globalY, columnID) {
+        function openFor(index, globalX, globalY, columnID, targetRows) {
             pendingRow = index
             pendingColumnID = columnID ?? ""
+            pendingRows = (targetRows && targetRows.length > 0) ? targetRows : [index]
             pendingProtocol = String(session.packets.protocolAt(index)).toUpperCase()
             popup(globalX, globalY)
         }
@@ -1037,6 +1140,24 @@ ApplicationWindow {
                     && (session.packets.strikethroughAt(rowContextMenu.pendingRow)
                         || session.packets.highlightColorAt(rowContextMenu.pendingRow) !== "")
                 onTriggered: session.resetPacketTextStyle(rowContextMenu.pendingPacketID)
+            }
+        }
+
+        // Upstream Export submenu (exportTargetRows): the targeted rows as
+        // pcap/pcapng; sidebar scopes export through their own menu.
+        Menu {
+            title: "Export"
+            enabled: rowContextMenu.pendingRows.length > 0
+                && !session.savedMode && session.currentSourceID !== ""
+                && !session.loading
+
+            MenuItem {
+                text: "as pcap…"
+                onTriggered: window.exportMenuRows("pcap")
+            }
+            MenuItem {
+                text: "as pcapng…"
+                onTriggered: window.exportMenuRows("pcapng")
             }
         }
     }
@@ -1385,6 +1506,7 @@ ApplicationWindow {
                         columnLayout: session.columnLayout
                         customColumns: session.customColumns
                         follow: true
+                        seededRows: controller.seededRows
                         visible: (!window.benchEnabled || workspace.isPrimary)
                             && window.captureMode === "packets"
                             && (window.benchEnabled ? window.benchView === "table" : (controller.packets.count > 0))
@@ -1393,10 +1515,10 @@ ApplicationWindow {
                                 return
                             workspace.presentPacket(controller.packets.packetIDAt(index))
                         }
-                        onRowContextClicked: function(index, globalX, globalY, columnID) {
+                        onRowContextClicked: function(index, globalX, globalY, columnID, targetRows) {
                             if (window.benchEnabled)
                                 return
-                            window.openContextMenu(index, globalX, globalY, columnID)
+                            window.openContextMenu(index, globalX, globalY, columnID, targetRows)
                         }
                     }
 

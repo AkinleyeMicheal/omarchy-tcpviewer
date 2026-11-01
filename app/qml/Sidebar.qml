@@ -16,6 +16,9 @@ Rectangle {
     // where the row carries a workspaceMode.
     property string captureMode: "packets"
     signal requestMode(string mode)
+    // Right-click export scopes (upstream SidebarViewController export menu
+    // on supported app/domain/IP/file rows; All Packets is not exportable).
+    signal exportScopeRequested(string nodeID, real globalX, real globalY)
 
     color: Theme.dark ? "#232323" : "#f6f6f6"
 
@@ -516,8 +519,17 @@ Rectangle {
             id: pinMouse
             anchors.fill: parent
             hoverEnabled: true
-            acceptedButtons: Qt.LeftButton
-            onClicked: root.session.selectPin(pinRow.pin.id)
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
+            // Pinned sources export through the same scope path (upstream
+            // exports pinned items as sidebar groups).
+            onClicked: (mouse) => {
+                if (mouse.button === Qt.RightButton) {
+                    root.exportScopeRequested(pinRow.pin.id, mouse.globalX,
+                        mouse.globalY)
+                    return
+                }
+                root.session.selectPin(pinRow.pin.id)
+            }
         }
 
         Text {
@@ -678,11 +690,20 @@ Rectangle {
             id: mouse
             anchors.fill: parent
             hoverEnabled: true
-            acceptedButtons: Qt.LeftButton
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
             // Source-tree rows widen the packet scope; the dashboard hands
             // control back to the packet workspace (upstream source-list
-            // selection forces workspaceMode .packets).
-            onClicked: {
+            // selection forces workspaceMode .packets). Right-click opens
+            // the export menu on scope rows (upstream export policy:
+            // app/domain/IP; groups and All Packets are not exportable).
+            onClicked: (mouse) => {
+                if (mouse.button === Qt.RightButton) {
+                    if (row.kind === "app" || row.kind === "domain"
+                        || row.kind === "ip")
+                        root.exportScopeRequested(row.nodeId, mouse.globalX,
+                            mouse.globalY)
+                    return
+                }
                 if (root.captureMode === "overview")
                     root.requestMode("packets")
                 root.session.selectTreeFilter(row.nodeId)
@@ -901,10 +922,18 @@ Rectangle {
             id: mouse
             anchors.fill: parent
             hoverEnabled: true
-            acceptedButtons: Qt.LeftButton
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
             // Selecting any packet source leaves the dashboard (upstream:
             // select(_: .interface/.file/…) sets workspaceMode = .packets).
-            onClicked: {
+            // Right-click offers the export panel when the source is the
+            // loaded one (upstream exports the file itself).
+            onClicked: (mouse) => {
+                if (mouse.button === Qt.RightButton) {
+                    if (!row.isLive && row.selected)
+                        root.exportScopeRequested(String(row.source.source_id),
+                            mouse.globalX, mouse.globalY)
+                    return
+                }
                 if (root.captureMode === "overview")
                     root.requestMode("packets")
                 root.session.selectSource(String(row.source.source_id))

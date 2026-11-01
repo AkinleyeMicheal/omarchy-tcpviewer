@@ -160,6 +160,11 @@ public:
     // mirroring the tree's appKey/domain/ip scope. Kind is "domain"/"ip"/
     // "client"; key is the domain name, IP address, or client key.
     Q_INVOKABLE int countForPin(const QString &kind, const QString &key) const;
+    // Export scopes collect packet ids for one group scope (same matching
+    // rules as countForPin). Kind is "domain"/"ip"/"client"/"all"; the
+    // collected list is capped at maxIDs (the daemon selector bound).
+    Q_INVOKABLE QVariantList packetIDsForScope(const QString &kind,
+                                               const QString &key, int maxIDs) const;
     // Replace the whole table from serialized rows (Saved workspace):
     // saved records render as normal rows, no daemon backing.
     Q_INVOKABLE void loadRows(const QVariantList &rows);

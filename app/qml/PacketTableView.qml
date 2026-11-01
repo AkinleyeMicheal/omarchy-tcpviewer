@@ -17,7 +17,7 @@ Item {
 
     signal rowClicked(int index)
     signal rowActivated(int index)
-    signal rowContextClicked(int index, real globalX, real globalY, string columnID)
+    signal rowContextClicked(int index, real globalX, real globalY, string columnID, var targetRows)
 
     readonly property var columns: columnLayout.columns
     readonly property int customRevision: customColumns.revision
@@ -89,6 +89,86 @@ Item {
         dropX = 0
     }
 
+    // Multi-row selection (upstream NSTableView): plain click selects one
+    // row, Ctrl+click toggles, Shift+click extends from the anchor. The
+    // menu targets follow upstream targetRowIndexes: clicking a selected
+    // row keeps the whole selection, otherwise the clicked row alone.
+    property var selectedRows: []
+    property int selectionAnchor: -1
+
+    function startSelection(row) {
+        selectedRows = [row]
+        selectionAnchor = row
+    }
+
+    function toggleSelection(row) {
+        var next = selectedRows.slice()
+        var index = next.indexOf(row)
+        if (index >= 0)
+            next.splice(index, 1)
+        else
+            next.push(row)
+        selectedRows = next
+        if (next.length === 0)
+            selectionAnchor = row
+    }
+
+    function extendSelection(row) {
+        var from = selectionAnchor >= 0 ? selectionAnchor : row
+        var to = row
+        if (from > to) {
+            from = to
+            to = selectionAnchor
+        }
+        var next = []
+        for (var i = from; i <= to; ++i)
+            next.push(i)
+        selectedRows = next
+    }
+
+    function targetRowsFor(clickedRow) {
+        if (selectedRows.length > 0 && selectedRows.indexOf(clickedRow) >= 0)
+            return selectedRows
+        return [clickedRow]
+    }
+
+    // Screenshot/bench hook: seed the multi-selection state (comma-list of
+    // row indexes) once rows exist. Fixture-only; no production caller.
+    property string seededRows: ""
+    readonly property var seedRowIndexes: {
+        const value = seededRows.trim()
+        if (value === "")
+            return []
+        return value.split(",").map(Number)
+    }
+    property bool seedApplied: false
+
+    onSeededRowsChanged: applySeededSelection()
+
+    function applySeededSelection() {
+        if (seedApplied || seedRowIndexes.length === 0 || model.count === 0)
+            return
+        var rows = []
+        for (var i = 0; i < seedRowIndexes.length; ++i) {
+            const row = seedRowIndexes[i]
+            if (typeof row === "number" && row >= 0 && row < model.count)
+                rows.push(row)
+        }
+        // Latch only on a real application so late-arriving rows re-run.
+        if (rows.length > 0) {
+            selectedRows = rows
+            selectionAnchor = rows[rows.length - 1]
+            seedApplied = true
+        }
+    }
+
+    Connections {
+        target: root.model
+        function onCountChanged() {
+            root.applySeededSelection()
+        }
+    }
+
     function readRole(item, role) {
         switch (role) {
         case "number": return String(item.number)
@@ -120,7 +200,10 @@ Item {
         }
     }
 
-    Component.onCompleted: root.model.setColumnCount(root.columns.length)
+    Component.onCompleted: {
+        root.model.setColumnCount(root.columns.length)
+        applySeededSelection()
+    }
     onColumnsChanged: {
         root.model.setColumnCount(root.columns.length)
         table.forceLayout()
@@ -316,7 +399,7 @@ Item {
             }
             readonly property bool isSecondary: !isCustom && Theme.isSecondary(columnData.role)
             readonly property bool isSummary: !isCustom && columnData.role === "summary"
-            readonly property bool rowSelected: row === root.selectedIndex
+            readonly property bool rowSelected: root.selectedRows.indexOf(row) >= 0
             // Upstream PacketHighlightPalette: a highlighted row fills the
             // whole row (selected rows keep the selection paint over it).
             readonly property string rowHighlight: String(model.highlightColor || "")
@@ -368,20 +451,30 @@ Item {
 
             MouseArea {
                 anchors.fill: parent
-                // Right-click raises the downstream context menu (Follow Stream, …).
+                // Right-click raises the downstream context menu (Follow
+                // Stream, …) without collapsing an existing multi-selection.
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                 onPressed: (mouse) => {
                     if (mouse.button === Qt.RightButton) {
-                        root.selectedIndex = cell.row
                         mouse.accepted = true
+                        root.selectedIndex = cell.row
                         root.rowContextClicked(cell.row, mouse.globalX, mouse.globalY,
-                            cell.columnData ? cell.columnData.id : "")
+                            cell.columnData ? cell.columnData.id : "",
+                            root.targetRowsFor(cell.row))
                     }
                 }
                 onClicked: (mouse) => {
                     if (mouse.button === Qt.LeftButton) {
                         root.selectedIndex = cell.row
-                        root.rowClicked(cell.row)
+                        if (mouse.modifiers & Qt.ShiftModifier) {
+                            root.extendSelection(cell.row)
+                        } else if (mouse.modifiers & Qt.ControlModifier) {
+                            root.toggleSelection(cell.row)
+                            root.selectionAnchor = cell.row
+                        } else {
+                            root.startSelection(cell.row)
+                            root.rowClicked(cell.row)
+                        }
                     }
                 }
                 onDoubleClicked: root.rowActivated(cell.row)

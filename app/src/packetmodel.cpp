@@ -425,6 +425,42 @@ int PacketListModel::countForPin(const QString &kind, const QString &key) const
     return count;
 }
 
+QVariantList PacketListModel::packetIDsForScope(const QString &kind,
+                                                const QString &key, int maxIDs) const
+{
+    // Same scope rules as countForPin; exports collect ids instead of counts
+    // and stop at the daemon's packet-id selector bound.
+    QVariantList ids;
+    if (maxIDs <= 0)
+        return ids;
+    ids.reserve(qMin(maxIDs, 64));
+    const QString wanted = key.trimmed();
+
+    for (const PacketRow &row : m_rows) {
+        bool matched = false;
+        if (kind == QStringLiteral("all")) {
+            matched = true;
+        } else if (kind == QStringLiteral("domain")) {
+            // Empty key = the tree's missing-domain bucket (domain:).
+            matched = wanted.isEmpty()
+                ? row.domain.isEmpty()
+                : normalizedPacketDomain(row.domain) == normalizedPacketDomain(wanted);
+        } else if (kind == QStringLiteral("ip") && !wanted.isEmpty()) {
+            // Upstream only places no-domain packets in IP buckets.
+            matched = row.domain.isEmpty()
+                && (normalizedPacketIP(row.source) == normalizedPacketIP(wanted)
+                    || normalizedPacketIP(row.destination) == normalizedPacketIP(wanted));
+        } else if (kind == QStringLiteral("client") && !wanted.isEmpty()) {
+            matched = row.clientKey == wanted;
+        }
+        if (matched)
+            ids.append(row.packetId);
+        if (ids.size() >= maxIDs)
+            break;
+    }
+    return ids;
+}
+
 void PacketListModel::loadRows(const QVariantList &rows)
 {
     QVector<PacketRow> parsed;
