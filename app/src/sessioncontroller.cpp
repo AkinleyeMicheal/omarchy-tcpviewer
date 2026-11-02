@@ -279,7 +279,7 @@ void SessionController::requestOverview()
     m_client->send(QStringLiteral("capture.overview"), params);
 }
 
-void SessionController::startCapture(const QString &interfaceID)
+void SessionController::startCapture(const QString &interfaceID, const QString &bpfExpression)
 {
     if (!m_client->connected()) {
         setError(QStringLiteral("tcpviewerd is not running."));
@@ -292,8 +292,18 @@ void SessionController::startCapture(const QString &interfaceID)
     }
     setError(QString());
     setLoading(true);
-    m_client->send(QStringLiteral("capture.start"),
-                   {{QStringLiteral("interface"), interface}});
+    QVariantMap params;
+    params.insert(QStringLiteral("interface"), interface);
+    // Fixture hook: start a live capture carrying a BPF filter so the
+    // toolbar indicator and speeds can be shot deterministically. The app UI
+    // itself never edits the filter (upstream rule: read-only, set by the
+    // CLI/agents).
+    const QString mappableBPF = !bpfExpression.isEmpty()
+        ? bpfExpression
+        : qEnvironmentVariable("TCPVIEWER_CAPTURE_FILTER").trimmed();
+    if (!mappableBPF.isEmpty())
+        params.insert(QStringLiteral("bpf"), mappableBPF);
+    m_client->send(QStringLiteral("capture.start"), params);
 }
 
 void SessionController::stopCapture()

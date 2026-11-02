@@ -17,6 +17,29 @@ Rectangle {
         return Number(count).toLocaleString(Qt.locale(), "f", 0)
     }
 
+    // Upstream TCPViewerStatusMetricsFormatter: memory ceil-divided into MB
+    // or GB; speeds into KB/s or MB/s with "0 KB/s" for zero.
+    function formatMemory(bytes) {
+        var b = Number(bytes || 0)
+        if (b <= 0)
+            return "0 MB"
+        var mb = 1024 * 1024
+        if (b >= mb * 1024)
+            return Math.ceil(b / (mb * 1024)) + " GB"
+        return Math.ceil(b / mb) + " MB"
+    }
+
+    function formatSpeed(bytesPerSecond) {
+        var b = Number(bytesPerSecond || 0)
+        if (b <= 0)
+            return "0 KB/s"
+        var kb = 1024
+        var mb = kb * 1024
+        if (b >= mb)
+            return Math.ceil(b / mb) + " MB/s"
+        return Math.ceil(b / kb) + " KB/s"
+    }
+
     readonly property string totalText: session.packets.count === 1
         ? "1 packet"
         : formattedCount(session.packets.count) + " packets"
@@ -30,6 +53,13 @@ Rectangle {
             parts.push(session.capturePhase)
         if (dropped > 0)
             parts.push(formattedCount(dropped) + " dropped")
+
+        // "• <memory> ↑ <up> ↓ <down>", upstream status strip right edge.
+        var memory = Number(status.memory_bytes || 0)
+        if (memory > 0)
+            parts.push("• " + formatMemory(memory)
+                + " ↑ " + formatSpeed(status.upload_bytes_per_second)
+                + " ↓ " + formatSpeed(status.download_bytes_per_second))
         return parts.join(" · ")
     }
 

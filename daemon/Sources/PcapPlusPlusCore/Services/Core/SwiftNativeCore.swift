@@ -83,7 +83,7 @@ final class PCPPNativeCore {
 
         // Deterministic order (Dictionary iteration is unordered — the
         // interface list must not jitter between refreshes).
-        return builders.values.sorted { $0.name < $1.name }.map { builder in
+        var interfaces = builders.values.sorted { $0.name < $1.name }.map { builder in
             let isLoopback = (builder.flags & UInt32(IFF_LOOPBACK)) != 0 || builder.name.hasPrefix("lo")
             let isUp = (builder.flags & UInt32(IFF_UP)) != 0
             let linkType: PCPPNativeLinkType = isLoopback ? .loopback : .ethernet
@@ -113,6 +113,34 @@ final class PCPPNativeCore {
                 providesMacOSMetadata: false
             )
         }
+
+        // Linux: libpcap's `any` pseudo-device aggregates every interface
+        // (SLL frames, loopback included) but getifaddrs never lists it.
+        // Synthesize the upstream "All Interfaces" row; the naming pipeline
+        // renders "All Interfaces (any)" and the per-packet link type comes
+        // from pcap at open time, so SLL dissection needs nothing else.
+        if !interfaces.contains(where: { $0.technicalName == "any" }) {
+            interfaces.append(PCPPNativeInterfaceDescriptor(
+                identifier: "any",
+                technicalName: "any",
+                displayName: "any",
+                friendlyName: nil,
+                interfaceDescription: nil,
+                loopback: false,
+                availability: .available,
+                availabilityReason: nil,
+                linkType: .raw,
+                addresses: [],
+                activityPreview: PCPPNativeActivityPreviewDescriptor(packetsPerSecond: nil, observedAt: nil),
+                canCapture: true,
+                supportsPromiscuousMode: true,
+                requiresBPFPermissionSetup: false,
+                providesMacOSMetadata: false
+            ))
+            interfaces.sort { $0.technicalName < $1.technicalName }
+        }
+
+        return interfaces
     }
 
     private func interfaceAddress(from sockaddr: sockaddr) -> PCPPNativeAddressDescriptor {

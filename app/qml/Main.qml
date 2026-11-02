@@ -384,6 +384,42 @@ ApplicationWindow {
                 }
             }
 
+            // Pause / resume live capture in place (upstream "Use the capture
+            // button to pause, resume, or stop"): the packet list is kept.
+            Rectangle {
+                id: pauseButton
+                width: pauseLabel.text === "Resume" ? 76 : 64
+                height: 28
+                radius: 6
+                visible: session.capturePhase === "running"
+                    || session.capturePhase === "paused"
+                enabled: visible && !session.stopInFlight
+                color: session.capturePhase === "paused" ? Theme.systemGreen : Theme.contentBackground
+                border.width: 1
+                border.color: session.capturePhase === "paused" ? Theme.systemGreen : Theme.separator
+
+                Text {
+                    id: pauseLabel
+                    anchors.centerIn: parent
+                    text: session.capturePhase === "paused" ? "Resume" : "Pause"
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.uiSmall
+                    font.weight: Font.DemiBold
+                    color: session.capturePhase === "paused" ? "white" : Theme.label
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: session.capturePhase === "paused"
+                        ? session.resumeCapture()
+                        : session.pauseCapture()
+                }
+
+                // Disabled-state parity with Start/Stop.
+                opacity: enabled ? 1 : 0.45
+            }
+
             Rectangle {
                 id: captureButton
                 width: 76
@@ -430,6 +466,93 @@ ApplicationWindow {
             anchors.rightMargin: 12
             anchors.verticalCenter: parent.verticalCenter
             spacing: 6
+
+            // Mirror of the upstream MCP-managed BPF indicator: a warning
+            // glyph appears only while a capture filter is active; the
+            // popover shows the current expression read-only.
+            ToolbarButton {
+                id: bpfChip
+                visible: String(session.status.capture_filter || "").length > 0
+                glyph: "≡"
+                width: 28
+                tooltip: "BPF Capture Filter configured"
+                fontColor: Theme.systemYellow
+                onClicked: bpfPopover.open()
+            }
+
+            Popup {
+                id: bpfPopover
+                parent: bpfChip
+                x: bpfChip.width - bpfPopover.width
+                y: bpfChip.height + 4
+                width: 380
+                padding: 12
+
+                background: Rectangle {
+                    radius: 8
+                    color: Theme.contentBackground
+                    border.width: 1
+                    border.color: Theme.separator
+                }
+
+                contentItem: ColumnLayout {
+                    spacing: 6
+
+                    Text {
+                        text: "BPF Capture Filter"
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.uiSize
+                        font.weight: Font.DemiBold
+                        color: Theme.label
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Only packets matching this expression are collected during live capture."
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.uiSmall
+                        color: Theme.secondaryLabel
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        height: Math.min(bpfExpression.implicitHeight + 14, 88)
+                        radius: 4
+                        color: Theme.windowBackground
+                        border.width: 1
+                        border.color: Theme.separator
+
+                        Flickable {
+                            anchors.fill: parent
+                            anchors.margins: 7
+                            contentWidth: width
+                            clip: true
+
+                            TextEdit {
+                                id: bpfExpression
+                                width: bpfPopover.width - 38
+                                readOnly: true
+                                text: String(session.status.capture_filter || "")
+                                color: Theme.label
+                                selectionColor: Theme.accent
+                                font.family: Theme.monoFont
+                                font.pixelSize: Theme.uiSmall
+                                wrapMode: Text.WrapAnywhere
+                            }
+                        }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Updated by the CLI and MCP agents. This setting is read-only."
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.uiSmall
+                        color: Theme.secondaryLabel
+                        wrapMode: Text.WordWrap
+                    }
+                }
+            }
 
             ToolbarButton {
                 glyph: "Σ"
@@ -1338,6 +1461,7 @@ ApplicationWindow {
         property string text
         property string glyph
         property string tooltip
+        property color fontColor: Theme.label
         signal clicked
 
         width: button.text !== "" ? buttonLabel.implicitWidth + 20 : 28
@@ -1353,7 +1477,7 @@ ApplicationWindow {
             text: button.glyph !== "" ? button.glyph : button.text
             font.family: Theme.uiFont
             font.pixelSize: button.glyph !== "" ? 13 : Theme.uiSize
-            color: Theme.label
+            color: button.fontColor
         }
 
         MouseArea {

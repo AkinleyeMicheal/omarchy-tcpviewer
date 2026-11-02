@@ -57,6 +57,13 @@ final class SourceManager: @unchecked Sendable {
         var loadProgress: PacketLoadProgress?
         var isOfflineLoading = false
 
+        // Status metrics: directional byte samples for live sources
+        // (upstream TCPViewerStatusMetricsService, daemon-side) and the
+        // monitor config the classification needs.
+        var traffic = CaptureTrafficMeter()
+        var monitoredLocalAddresses: Set<String> = []
+        var captureFilterExpression: String?
+
         // Display-filter index: activated expression + ascending matching IDs.
         // Incremental: `evaluatedCount` = prefix of `summaries` already scanned.
         var displayFilter: String?
@@ -383,6 +390,8 @@ final class SourceManager: @unchecked Sendable {
                         interfaceID: interfaceID,
                         phase: LiveCaptureSessionPhase.ready.rawValue
                     )
+                    source.captureFilterExpression = bpf
+                    source.monitoredLocalAddresses = CaptureTrafficClassifier.localAddresses(interface)
                     self.attach(source: source)
                     self.sources.append(source)
 
@@ -828,6 +837,10 @@ final class SourceManager: @unchecked Sendable {
             case .append:
                 guard !enriched.isEmpty else { return }
                 source.summaries.append(contentsOf: enriched)
+                if source.kind == .live, let interfaceID = source.interfaceID {
+                    source.traffic.record(enriched, interfaceID: interfaceID,
+                                          localAddresses: source.monitoredLocalAddresses)
+                }
                 // Append-path rule: only NEW ids join the indexes.
                 scheduleTailEvaluation(for: source, newCount: enriched.count)
             }
@@ -1870,6 +1883,17 @@ final class SourceManager: @unchecked Sendable {
         ]
         if let interfaceID = source.interfaceID {
             data["interface"] = .string(interfaceID)
+        }
+        if let captureFilter = source.captureFilterExpression {
+            data["capture_filter"] = .string(captureFilter)
+        }
+        if let memoryBytes = CaptureProcessMetrics.memoryBytes() {
+            data["memory_bytes"] = .int(Int(memoryBytes))
+        }
+        if source.kind == .live {
+            let rates = source.traffic.rates()
+            data["upload_bytes_per_second"] = .int(Int(rates.upload))
+            data["download_bytes_per_second"] = .int(Int(rates.download))
         }
         if let filePath = source.filePath {
             data["path"] = .string(filePath)

@@ -143,7 +143,7 @@ public:
     Q_INVOKABLE void start();
     Q_INVOKABLE void refreshInterfaces();
     Q_INVOKABLE void refreshSources();
-    Q_INVOKABLE void startCapture(const QString &interfaceID);
+    Q_INVOKABLE void startCapture(const QString &interfaceID, const QString &bpfExpression = QString());
     Q_INVOKABLE void stopCapture();
     Q_INVOKABLE void pauseCapture();
     Q_INVOKABLE void resumeCapture();

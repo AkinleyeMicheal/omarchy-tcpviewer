@@ -196,6 +196,29 @@ page header.
 - Right-clicking a protocol-detail row in the inspector offers
   **Create Column**, adding a bounded table column backed by that field.
 
+## Live capture
+
+- **Interfaces** — the picker lists every capturable device, first among them
+  the synthesized **All Interfaces (any)** row, libpcap's every-interface
+  device (SLL frames, loopback included). The picker locks while a capture
+  is running; stop before switching.
+- **Start / Stop / Pause / Resume** — Start and Stop are the always-visible
+  controls; **Pause / Resume** appears (in the phase color) only while a
+  capture runs or is paused. Pausing freezes the packet list in place —
+  nothing is appended, nothing is lost.
+- **BPF capture filter** — a capture start can carry a BPF expression
+  (`capture start --interface IFACE --bpf EXPR` in the CLI; agents likewise).
+  While one is active the toolbar shows the warning-colored ≡ indicator that
+  opens a read-only popover with the expression — matching upstream, where
+  editing the capture filter belongs to the CLI/MCP and the app only
+  displays it. Invalid expressions are rejected through libpcap before the
+  capture starts.
+- **Status strip** — the right edge of the footer shows the capture phase,
+  drop count, memory use, and upload/download speed (`running · 154 MB ↑
+  1 KB/s ↓ 890 KB/s`). Memory is the daemon's own footprint; the byte rates
+  cover remote traffic only — local-to-local packets (loopback included)
+  stay uncounted, matching upstream's direction accounting.
+
 ## Filters
 
 - **Quick filters** — the chip row above the table narrows every request (TCP,
