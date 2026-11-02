@@ -189,9 +189,13 @@ void SessionController::start()
     }
 
     // CI/test hook: start in the Saved workspace so fixture screenshots can
-    // capture starred rows and the sidebar count without a click path.
+    // capture starred rows and the sidebar count without a click path. The
+    // fixed 1500 ms wait lets an OPEN_FILES import and its file.session_state
+    // reply (document-scoped saved records) land before the selector runs.
     if (qEnvironmentVariableIsSet("TCPVIEWER_SAVED_VIEW")) {
-        QTimer::singleShot(1500, this, [this]() { selectSavedPackets(); });
+        bool ok = false;
+        const int delayMs = qEnvironmentVariableIntValue("TCPVIEWER_SAVED_VIEW_DELAY_MS", &ok);
+        QTimer::singleShot(ok && delayMs > 0 ? delayMs : 1500, this, [this]() { selectSavedPackets(); });
     }
 
     // A local socket can connect synchronously, so the pending list must exist
@@ -476,9 +480,12 @@ void SessionController::clearPackets()
 {
     if (m_savedMode) {
         // The Saved workspace version of "Clear All Packets" empties the
-        // starred list itself (nothing is held daemon-side).
-        m_savedStore.clear();
-        persistSavedPackets();
+        // starred list itself (nothing is held daemon-side). Document-scoped
+        // overlays clear in memory like the rest of their mutations.
+        const bool persisted = activeSavedStore() == &m_savedStore;
+        activeSavedStore()->clear();
+        if (persisted)
+            persistSavedPackets();
         emit savedPacketsChanged();
         m_packets->clear();
         return;
@@ -570,18 +577,21 @@ void SessionController::dispatchPacketAnnotation(
     // Saved workspace: no daemon backing — records ARE the copies, write
     // through and stop.
     if (m_savedMode) {
-        if (m_savedStore.applyAnnotation({id}, change) > 0) {
-            persistSavedPackets();
+        if (activeSavedStore()->applyAnnotation({id}, change) > 0) {
+            if (activeSavedStore() == &m_savedStore)
+                persistSavedPackets();
             emit savedPacketsChanged();
         }
         return;
     }
 
     // Starred copies backed by the active capture stay in sync with it
-    // (upstream backingIdentity == active ingest identity rule).
+    // (upstream backingIdentity == active ingest identity rule); document
+    // overlays mirror without persisting.
     if (!m_currentSourceID.isEmpty()
-        && m_savedStore.applyAnnotation({id}, change, m_currentSourceID) > 0) {
-        persistSavedPackets();
+        && activeSavedStore()->applyAnnotation({id}, change, m_currentSourceID) > 0) {
+        if (activeSavedStore() == &m_savedStore)
+            persistSavedPackets();
         emit savedPacketsChanged();
     }
 
@@ -882,10 +892,14 @@ void SessionController::savePacketAt(int row)
     // mismatch by re-checking the readback.
     if (saved.packetId.isEmpty() || saved.packetId != packetID)
         return;
-    const int added = m_savedStore.add({saved}, m_currentSourceID);
+    SavedPacketStore *store = activeSavedStore();
+    const int added = store->add({saved}, m_currentSourceID);
     if (added == 0)
         return;
-    persistSavedPackets();
+    // Document-scoped saves stay in the overlay (never persisted here);
+    // they ride the source's next export like the carried state.
+    if (store == &m_savedStore)
+        persistSavedPackets();
     emit savedPacketsChanged();
 }
 
@@ -894,15 +908,18 @@ void SessionController::removeSavedPacket(const QString &packetID)
     // Starred rows with matching ids from different sources can coexist
     // (pcap numbering restarts); removal targets the first ordered record,
     // the visible one, so a second removal clears the next copy.
-    if (!m_savedStore.remove(packetID))
+    const bool persisted = activeSavedStore() == &m_savedStore;
+    if (!activeSavedStore()->remove(packetID))
         return;
-    persistSavedPackets();
+    if (persisted)
+        persistSavedPackets();
     emit savedPacketsChanged();
     if (!m_savedMode)
         return;
+    const SavedPacketStore *store = activeSavedStore();
     QVector<PacketRow> rows;
-    rows.reserve(m_savedStore.count());
-    for (const SavedPacketRecord &record : m_savedStore.records())
+    rows.reserve(store->count());
+    for (const SavedPacketRecord &record : store->records())
         rows.append(record.row);
     m_packets->clear();
     m_packets->appendRows(rows);
@@ -928,9 +945,12 @@ void SessionController::selectSavedPackets()
     m_currentSourceID.clear();
     emit currentSourceChanged();
 
+    // The active store was resolved while the bundle source was still the
+    // table scope; tooltips and the Saved rows now render it.
+    const SavedPacketStore *store = activeSavedStore();
     QVector<PacketRow> rows;
-    rows.reserve(m_savedStore.count());
-    for (const SavedPacketRecord &record : m_savedStore.records())
+    rows.reserve(store->count());
+    for (const SavedPacketRecord &record : store->records())
         rows.append(record.row);
     m_packets->clearTreeFilter();
     m_packets->clear();
@@ -966,19 +986,56 @@ void SessionController::handleSessionState(const QVariantMap &data)
     if (sourceID.isEmpty())
         return;
 
+    bool changed = false;
     PinStore document;
     for (const QVariant &value : data.value(QStringLiteral("pins")).toList()) {
         const PinRecord pin = PinStore::fromSessionPin(value.toMap());
         if (pin.isValid())
             document.upsert(pin);
     }
-
     if (document.count() > 0)
         m_documentPins.insert(sourceID, document);
     else
         m_documentPins.remove(sourceID);
     if (sourceID == m_currentSourceID)
+        changed = true;
+
+    // Document-scoped saved packets ride the same state reply (upstream
+    // SavedPacketService useDocumentRecords): each record carries a full
+    // summary row in the packets.list shape, so mirrors and the Saved
+    // workspace work without extra round-trips.
+    QVariantList recordMaps;
+    for (const QVariant &value : data.value(QStringLiteral("saved_records")).toList()) {
+        const QVariantMap record = value.toMap();
+        const QString packetId = record.value(QStringLiteral("id")).toString();
+        if (packetId.isEmpty())
+            continue;
+        const PacketRow row = parseSummary(record.value(QStringLiteral("packet")).toMap());
+        if (row.packetId.isEmpty() && packetId.isEmpty())
+            continue;
+        PacketRow identified = row;
+        identified.packetId = packetId;
+        QVariantMap map = packetRowToMap(identified);
+        map.insert(QStringLiteral("packetId"), packetId);
+        map.insert(QStringLiteral("savedAt"),
+                   qint64(record.value(QStringLiteral("saved_at")).toDouble() * 1000.0));
+        map.insert(QStringLiteral("backing"),
+                   record.value(QStringLiteral("backing")).toString());
+        recordMaps.append(map);
+    }
+    SavedPacketStore saved;
+    saved.loadFromVariantList(recordMaps);
+    if (saved.count() > 0)
+        m_documentSaved.insert(sourceID, saved);
+    else
+        m_documentSaved.remove(sourceID);
+    if (sourceID == m_currentSourceID || m_lastNonSavedSourceID == sourceID)
+        changed = true;
+
+    if (changed) {
         emit pinsChanged();
+        emit savedPacketsChanged();
+    }
 }
 
 void SessionController::selectTreeFilter(const QString &nodeId)
@@ -1258,12 +1315,21 @@ void SessionController::handleResponse(const QString &command, const QVariantMap
     }
 
     if (command == QStringLiteral("source.close")) {
-        // Closed sources lose their document overlay (upstream: closing the
-        // session document restores the persistent pin list).
+        // Closed sources lose their document overlays (upstream: closing the
+        // session document restores the persistent lists).
         const QString closedSource = data.value(QStringLiteral("source_id")).toString();
-        if (!closedSource.isEmpty() && m_documentPins.remove(closedSource)
-            && closedSource == m_currentSourceID) {
+        bool changed = false;
+        if (!closedSource.isEmpty()) {
+            if (m_documentPins.remove(closedSource) > 0)
+                changed = true;
+            if (m_documentSaved.remove(closedSource) > 0)
+                changed = true;
+        }
+        if ((closedSource == m_currentSourceID
+             || (m_savedMode && closedSource == m_lastNonSavedSourceID))
+            && changed) {
             emit pinsChanged();
+            emit savedPacketsChanged();
         }
         refreshSources();
         return;
@@ -1637,12 +1703,40 @@ void SessionController::exportSession(const QString &path)
 {
     if (!m_client->connected() || m_currentSourceID.isEmpty() || path.isEmpty())
         return;
+
+    // App-state round trip (C5, upstream TCPViewSessionExportSnapshot's
+    // pins/savedPackets): the active stores travel with the bundle; saved
+    // references stay slim because the daemon resolves them to its own
+    // summary records (comment/style state rides the source anyway).
+    QVariantList pinValues;
+    pinValues.reserve(activePinStore()->count());
+    for (const PinRecord &pin : activePinStore()->records())
+        pinValues.append(pin.toSessionMap());
+
+    QVariantList savedValues;
+    savedValues.reserve(activeSavedStore()->count());
+    for (const SavedPacketRecord &record : activeSavedStore()->records()) {
+        if (record.packetId.isEmpty() || record.savedAtMs <= 0)
+            continue;
+        QVariantMap value;
+        value.insert(QStringLiteral("id"), record.packetId);
+        value.insert(QStringLiteral("savedAt"),
+                     QDateTime::fromMSecsSinceEpoch(record.savedAtMs)
+                         .toUTC()
+                         .toString(QStringLiteral("yyyy-MM-dd'T'HH:mm:ss'Z'")));
+        if (!record.backing.isEmpty())
+            value.insert(QStringLiteral("backingIdentity"), record.backing);
+        savedValues.append(value);
+    }
+
     setError(QString());
     setLoading(true);
     m_client->send(QStringLiteral("file.export_session"), {
         {QStringLiteral("source_id"), m_currentSourceID},
         {QStringLiteral("path"), path},
         {QStringLiteral("overwrite"), true},
+        {QStringLiteral("pins"), pinValues},
+        {QStringLiteral("saved_records"), savedValues},
     }, 300);
 }
 

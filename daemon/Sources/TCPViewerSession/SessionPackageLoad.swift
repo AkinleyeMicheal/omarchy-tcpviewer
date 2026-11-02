@@ -254,10 +254,9 @@ public enum SessionPackage {
             packetRecords: validRecords,
             clientStore: clientStore,
             annotations: sanitizeAnnotations(annotations, validPacketIDs: validPacketIDs),
-            // state.json passes through unsanitized for now: the daemon never
-            // authors imported files/pins yet, and the app-state round-trip
-            // (with field-wise sanitization) is a later phase.
-            state: state,
+            // Upstream sanitizedSavedPackets: saved records keep only packets
+            // that survived rehydration, deduped on the packet id.
+            state: sanitizedState(state, validPacketIDs: validPacketIDs),
             importReport: SessionImportReport(
                 importedFlowCount: validRecords.count,
                 failedFlowCount: failedFlowCount
@@ -334,5 +333,20 @@ public enum SessionPackage {
             )
         }
         return TCPViewSessionAnnotations(annotations: sanitized)
+    }
+
+    /// Upstream sanitizedSavedPackets: saved records stay only when their
+    /// packet survived rehydration, deduped on the packet id (first wins).
+    private static func sanitizedState(
+        _ state: TCPViewSessionState,
+        validPacketIDs: Set<PacketSummary.ID>
+    ) -> TCPViewSessionState {
+        var updated = state
+        var seenPacketIDs = Set<PacketSummary.ID>()
+        updated.savedPackets = state.savedPackets.filter { record in
+            validPacketIDs.contains(record.packet.id)
+                && seenPacketIDs.insert(record.packet.id).inserted
+        }
+        return updated
     }
 }

@@ -30,6 +30,8 @@ struct PinRecord
 
     bool isValid() const;
     QVariantMap toMap() const;
+    // file.export_session wire shape (upstream PacketPin camelCase keys).
+    QVariantMap toSessionMap() const;
     static PinRecord fromMap(const QVariantMap &map);
 };
 

@@ -11,6 +11,7 @@ import Foundation
 import PcapPlusPlusCore
 import TCPViewerIPC
 import TCPViewerOverview
+import TCPViewerSession
 
 final class CommandRouter: @unchecked Sendable {
     private let manager: SourceManager
@@ -333,10 +334,14 @@ final class CommandRouter: @unchecked Sendable {
         case .fileExportSession:
             do {
                 let path = try request.requireString("path")
+                let pins = try Self.optionalBoundedSessionPins(request, max: 256)
+                let savedReferences = try Self.optionalBoundedSavedReferences(request, max: 5_000)
                 manager.exportSession(
                     sourceID: request.optionalString("source_id"),
                     path: path,
-                    overwrite: request.bool("overwrite") ?? false
+                    overwrite: request.bool("overwrite") ?? false,
+                    pins: pins,
+                    savedReferences: savedReferences
                 ) { result in
                     respond(result)
                 }
@@ -788,5 +793,41 @@ extension IPCRequest {
             return [path]
         }
         throw SourceError(code: IPCError.invalidParams, message: "missing param: paths")
+    }
+}
+
+extension CommandRouter {
+    // App-state round trip (C5): file.export_session carries the client's
+    // active pin and saved-record lists as upstream-shaped camelCase JSON
+    // objects; the session codec decodes them after re-encoding the IPC
+    // value tree. Bounded like the packet-id selectors.
+    static func optionalBoundedSessionPins(
+        _ request: IPCRequest,
+        max: Int
+    ) throws -> [SessionPinRecord]? {
+        guard let array = request.array("pins") else { return nil }
+        guard array.count <= max else {
+            throw SourceError(code: IPCError.invalidParams, message: "pins exceeds \(max) entries")
+        }
+        let payload = try JSONEncoder().encode(IPCValue.array(array))
+        return try TCPViewSessionCodec.decodeJSON([SessionPinRecord].self, from: payload)
+    }
+
+    static func optionalBoundedSavedReferences(
+        _ request: IPCRequest,
+        max: Int
+    ) throws -> [SessionSavedPacketReference]? {
+        guard let array = request.array("saved_records") else { return nil }
+        guard array.count <= max else {
+            throw SourceError(
+                code: IPCError.invalidParams,
+                message: "saved_records exceeds \(max) entries"
+            )
+        }
+        let payload = try JSONEncoder().encode(IPCValue.array(array))
+        return try TCPViewSessionCodec.decodeJSON(
+            [SessionSavedPacketReference].self,
+            from: payload
+        )
     }
 }

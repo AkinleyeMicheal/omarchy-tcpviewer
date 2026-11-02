@@ -1542,6 +1542,8 @@ final class SourceManager: @unchecked Sendable {
         sourceID: String?,
         path: String,
         overwrite: Bool,
+        pins: [SessionPinRecord]? = nil,
+        savedReferences: [SessionSavedPacketReference]? = nil,
         completion: @escaping (Result<[String: IPCValue], Error>) -> Void
     ) {
         queue.async {
@@ -1584,6 +1586,8 @@ final class SourceManager: @unchecked Sendable {
                         self.exportSessionBundle(
                             source: source,
                             document: document,
+                            pins: pins,
+                            savedReferences: savedReferences,
                             url: url,
                             destination: destination,
                             completion: completion
@@ -1597,6 +1601,8 @@ final class SourceManager: @unchecked Sendable {
                     self.exportSessionBundle(
                         source: source,
                         document: document,
+                        pins: pins,
+                        savedReferences: savedReferences,
                         url: url,
                         destination: destination,
                         completion: completion
@@ -1630,15 +1636,21 @@ final class SourceManager: @unchecked Sendable {
                             let captureData = (try? Data(contentsOf: stageURL)) ?? Data()
                             try? FileManager.default.removeItem(at: stageURL)
                             do {
-                                try SessionPackage.writePackage(
-                                    packets: source.summaries,
-                                    captureFileData: captureData,
-                                    state: TCPViewSessionState(sourceMetadata: TCPViewSessionSourceMetadata(
+                                let state = Self.overlaidState(
+                                    TCPViewSessionState(sourceMetadata: TCPViewSessionSourceMetadata(
                                         fileName: source.interfaceID.map { "Capture on \($0)" },
                                         filePath: nil,
                                         format: CaptureFileFormat.pcapng.rawValue,
                                         packetCount: source.summaries.count
                                     )),
+                                    pins: pins,
+                                    savedReferences: savedReferences,
+                                    source: source
+                                )
+                                try SessionPackage.writePackage(
+                                    packets: source.summaries,
+                                    captureFileData: captureData,
+                                    state: state,
                                     to: url
                                 )
                                 completion(.success([
@@ -1678,23 +1690,25 @@ final class SourceManager: @unchecked Sendable {
         }
     }
 
-    /// Session-document workspace state for a source (pins for now; the
-    /// saved-packets and full app-state round-trip are later phases). Non-
-    /// session sources (pcap/pcapng, live captures) return an empty state so
-    /// clients drop any document overlay.
+    /// Session-document workspace state for a source (upstream
+    /// TCPViewSessionImportService carries pins + saved packets). Non-session
+    /// sources (pcap/pcapng, live captures) return empty lists so clients
+    /// drop any document overlay.
     func sessionState(
         sourceID: String?,
         completion: @escaping (Result<[String: IPCValue], Error>) -> Void
     ) {
         queue.async {
             guard let source = self.resolveSource(id: sourceID, completion: completion) else { return }
-            let pins = (source.offlineDocument as? SessionBundleDocument)?
-                .contents.state.pins ?? []
+            let state = (source.offlineDocument as? SessionBundleDocument)?.contents.state
+            let pins = state?.pins ?? []
+            let savedRecords = state?.savedPackets ?? []
             // The source echo lets clients attribute out-of-order replies
             // after rapid source switches without request-id bookkeeping.
             completion(.success([
                 "source_id": .string(source.id),
                 "pins": .array(pins.map(Self.pinValues)),
+                "saved_records": .array(savedRecords.map(Self.savedRecordValues)),
             ]))
         }
     }
@@ -1718,6 +1732,21 @@ final class SourceManager: @unchecked Sendable {
         return .object(values)
     }
 
+    // Upstream SavedPacketRecord wire shape. `packet` reuses the packets.list
+    // row serde so clients parse a single summary form; saved/comment state
+    // comes straight off the rehydrated summary.
+    private static func savedRecordValues(_ record: SessionSavedPacketRecord) -> IPCValue {
+        var values: [String: IPCValue] = [
+            "id": .string(record.id),
+            "saved_at": .double(record.savedAt.timeIntervalSince1970),
+            "packet": CommandRouter.packetData(record.packet, full: false),
+        ]
+        if let backing = record.backingIdentity, !backing.isEmpty {
+            values["backing"] = .string(backing)
+        }
+        return .object(values)
+    }
+
     /// Offline .tcpviewsession export: stages the capture via a document save,
     /// then writes the ZIP bundle (packets + sidecars) atomically. Session
     /// sources re-export their own carried state; regular offline sources
@@ -1725,18 +1754,26 @@ final class SourceManager: @unchecked Sendable {
     private func exportSessionBundle(
         source: Source,
         document: any OfflineCaptureDocumentProviding,
+        pins: [SessionPinRecord]? = nil,
+        savedReferences: [SessionSavedPacketReference]? = nil,
         url: URL,
         destination: String,
         completion: @escaping (Result<[String: IPCValue], Error>) -> Void
     ) {
         let bundleDocument = document as? SessionBundleDocument
-        let state: TCPViewSessionState = bundleDocument?.contents.state
+        // App-state round trip (C5): the client's current pin/saved-record
+        // lists overlay whatever the source carries — upstream's export
+        // snapshot takes pinService.pins() / savedPacketService.records().
+        // A `nil` param keeps the carried values so old CLI callers and
+        // plain re-exports stay byte-compatible.
+        let baseState: TCPViewSessionState = bundleDocument?.contents.state
             ?? TCPViewSessionState(sourceMetadata: TCPViewSessionSourceMetadata(
                 fileName: source.filePath.map { URL(fileURLWithPath: $0).lastPathComponent },
                 filePath: source.filePath,
                 format: CaptureFileFormat.pcapng.rawValue,
                 packetCount: source.summaries.count
             ))
+        let state = Self.overlaidState(baseState, pins: pins, savedReferences: savedReferences, source: source)
 
         let stageURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("TCPViewSessionExport-\(UUID().uuidString).pcapng")
@@ -1781,6 +1818,46 @@ final class SourceManager: @unchecked Sendable {
     }
 
     // MARK: - Status snapshots
+
+    /// App-state overlay (C5): the client's current pin/saved-record lists
+    /// replace the state's own, per upstream's export snapshot (pins +
+    /// savedPackets from the active app stores). Saved ids resolve against
+    /// this source's summaries — client rows are presentation snapshots, so
+    /// unresolvable ids are dropped and duplicate packet ids keep the first
+    /// (the same trim upstream applies to state carried through a bundle).
+    static func overlaidState(
+        _ base: TCPViewSessionState,
+        pins: [SessionPinRecord]?,
+        savedReferences: [SessionSavedPacketReference]?,
+        source: Source
+    ) -> TCPViewSessionState {
+        var state = base
+        if let pins {
+            var seenPins = Set<String>()
+            state.pins = pins.filter { seenPins.insert($0.id).inserted }
+        }
+        if let savedReferences {
+            let summaryByID = Dictionary(
+                source.summaries.map { ($0.id, $0) },
+                uniquingKeysWith: { existing, _ in existing }
+            )
+            var seenPackets = Set<PacketSummary.ID>()
+            state.savedPackets = savedReferences.compactMap { entry in
+                guard let id = UInt64(entry.id),
+                      let summary = summaryByID[id],
+                      seenPackets.insert(summary.id).inserted else {
+                    return nil
+                }
+                return SessionSavedPacketRecord(
+                    id: entry.id,
+                    savedAt: entry.savedAt,
+                    backingIdentity: entry.backingIdentity,
+                    packet: summary
+                )
+            }
+        }
+        return state
+    }
 
     func statusData(for source: Source) -> [String: IPCValue] {
         var data: [String: IPCValue] = [

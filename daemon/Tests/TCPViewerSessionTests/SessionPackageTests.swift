@@ -53,6 +53,7 @@ final class SessionPackageTests: XCTestCase {
     private func writeBundle(
         packets: [PacketSummary],
         pins: [SessionPinRecord] = [],
+        saves: [SessionSavedPacketRecord] = [],
         to url: URL
     ) throws {
         var state = TCPViewSessionState(sourceMetadata: TCPViewSessionSourceMetadata(
@@ -62,6 +63,7 @@ final class SessionPackageTests: XCTestCase {
             packetCount: packets.count
         ))
         state.pins = pins
+        state.savedPackets = saves
         try SessionPackage.writePackage(
             packets: packets,
             captureFileData: Data("synthetic-capture-bytes".utf8),
@@ -141,6 +143,68 @@ final class SessionPackageTests: XCTestCase {
         let decoded = try TCPViewSessionCodec
             .decodeJSON([SessionPinRecord].self, from: data)
         XCTAssertEqual(decoded, [pin])
+    }
+
+    func testSavedRecordsRoundTripThroughStateJSON() throws {
+        // C5: saved packets ride state.json like upstream's document-scoped
+        // SavedPacketRecord list — the full PacketSummary embeds with
+        // camelCase keys and iso8601 savedAt.
+        let url = temporaryFileURL("saved-bundle.tcpviewsession")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let packets = [
+            makePacket(id: 1, comment: "first"),
+            makePacket(id: 2, textStyle: PacketTextStyle(highlightColor: .blue)),
+        ]
+        let saves = [
+            SessionSavedPacketRecord(
+                id: "2", savedAt: Date(timeIntervalSince1970: 1_760_100_000),
+                backingIdentity: "capture-1", packet: packets[1]),
+            SessionSavedPacketRecord(
+                id: "1", savedAt: Date(timeIntervalSince1970: 1_760_100_100),
+                packet: packets[0]),
+        ]
+        try writeBundle(packets: packets, saves: saves, to: url)
+
+        let contents = try SessionPackage.loadPackage(at: url)
+        defer { try? FileManager.default.removeItem(at: contents.extractionDirectoryURL) }
+        XCTAssertEqual(contents.state.savedPackets, saves)
+        XCTAssertEqual(contents.state.savedPackets.first?.packet.customComment, nil)
+        XCTAssertEqual(contents.state.savedPackets.first?.packet.textStyle?.highlightColor, .blue)
+        XCTAssertEqual(contents.state.savedPackets.last?.packet.customComment, "first")
+        // Upstream interchange keys: SavedPacketRecord auto-Codable names.
+        let payload = String(
+            decoding: try TCPViewSessionCodec.encodeJSON(saves), as: UTF8.self)
+        XCTAssertTrue(payload.contains("\"savedAt\""), payload)
+        XCTAssertTrue(payload.contains("\"backingIdentity\""), payload)
+        XCTAssertTrue(payload.contains("\"packet\""), payload)
+        XCTAssertTrue(payload.contains("\"packetNumber\""), payload)
+    }
+
+    func testSavedRecordsImportSanitizesToRehydratedPackets() throws {
+        // Upstream sanitizedSavedPackets: only saved packets that survived
+        // rehydration stay, deduped on the packet id (first wins).
+        let url = temporaryFileURL("saved sanitize.zip")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let packets = [makePacket(id: 1), makePacket(id: 2)]
+        let saves = [
+            SessionSavedPacketRecord(
+                id: "1", savedAt: Date(timeIntervalSince1970: 1_760_100_000), packet: makePacket(id: 1)),
+            // Packet 9 does not exist in the capture; the duplicate id 1 is
+            // dropped by the dedupe on the packet id, not by existence.
+            SessionSavedPacketRecord(
+                id: "9", savedAt: Date(timeIntervalSince1970: 1_760_100_005), packet: makePacket(id: 9)),
+            SessionSavedPacketRecord(
+                id: "1", savedAt: Date(timeIntervalSince1970: 1_760_100_010), packet: makePacket(id: 1)),
+        ]
+        try writeBundle(packets: packets, saves: saves, to: url)
+
+        let contents = try SessionPackage.loadPackage(at: url)
+        defer { try? FileManager.default.removeItem(at: contents.extractionDirectoryURL) }
+        XCTAssertEqual(contents.state.savedPackets.count, 1)
+        XCTAssertEqual(contents.state.savedPackets.first?.packet.id, 1)
+        XCTAssertEqual(contents.state.savedPackets.first?.savedAt.timeIntervalSince1970, 1_760_100_000)
     }
 
     func testWrongMagicIsRejected() throws {

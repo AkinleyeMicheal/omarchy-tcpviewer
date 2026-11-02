@@ -43,8 +43,44 @@ private slots:
     void savedRecordsDedupeByBackingPair();
     void savedAnnotationMirroring();
     void savedRowPersistenceRoundTrip();
+    void pinSessionMapShape();
     void packetModelCountForPinScopes();
 };
+
+void AnnotationStoresTest::pinSessionMapShape()
+{
+    // C5: file.export_session sends the upstream PacketPin wire shape —
+    // camelCase keys, ISO-8601 createdAt, and empty optionals stay absent
+    // (the session JSON codec decodes absent keys to nil).
+    PinRecord pin;
+    pin.id = QStringLiteral("domain:example.com");
+    pin.kind = QStringLiteral("domain");
+    pin.title = QStringLiteral("example.com");
+    pin.domain = QStringLiteral("example.com");
+    pin.createdAtMs = 1760100000000;
+    const QVariantMap map = pin.toSessionMap();
+    QCOMPARE(map.value(QStringLiteral("id")).toString(), QStringLiteral("domain:example.com"));
+    QCOMPARE(map.value(QStringLiteral("kind")).toString(), QStringLiteral("domain"));
+    QCOMPARE(map.value(QStringLiteral("title")).toString(), QStringLiteral("example.com"));
+    QCOMPARE(map.value(QStringLiteral("createdAt")).toString(),
+             QStringLiteral("2025-10-10T12:40:00Z"));
+    QCOMPARE(map.value(QStringLiteral("domain")).toString(), QStringLiteral("example.com"));
+    QVERIFY(!map.contains(QStringLiteral("ipAddress")));
+    QVERIFY(!map.contains(QStringLiteral("clientKey")));
+
+    PinRecord client;
+    client.id = QStringLiteral("client:/usr/bin/demo");
+    client.kind = QStringLiteral("client");
+    client.title = QStringLiteral("demo");
+    client.clientKey = QStringLiteral("/usr/bin/demo");
+    client.clientDisplay = QStringLiteral("demo");
+    client.ip = QStringLiteral("10.0.0.2");  // client pins never carry the ip field
+    const QVariantMap clientMap = client.toSessionMap();
+    QCOMPARE(clientMap.value(QStringLiteral("clientKey")).toString(), QStringLiteral("/usr/bin/demo"));
+    QCOMPARE(clientMap.value(QStringLiteral("clientDisplayName")).toString(), QStringLiteral("demo"));
+    QVERIFY(!clientMap.contains(QStringLiteral("ipAddress")));
+    QVERIFY(!clientMap.contains(QStringLiteral("createdAt")));
+}
 
 void AnnotationStoresTest::pinsUpsertDedupeAndRemove()
 {

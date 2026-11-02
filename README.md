@@ -217,8 +217,8 @@ page header.
   pin its client; pinned rows scope the table with one click. **Save** on a
   packet row copies it into the **Saved** workspace, where comments and
   highlights survive closing (and even deleting) the source. Both persist
-  in QSettings across launches; pins carried inside a `.tcpviewsession`
-  document appear while that session is open.
+  in QSettings across launches; pins and saved packets carried inside a
+  `.tcpviewsession` document replace the lists while that session is open.
 
 ![Structured filter builder](docs/filter-builder.png)
 
@@ -228,11 +228,14 @@ Captures can be saved as a `.tcpviewsession` bundle (**Export Session** in the
 toolbar / `file.export_session` in the CLI) and reopened later — the file
 carries the packets, the backing pcapng, annotations (comments and highlight
 colors), client records and workspace state, mirroring upstream TCP Viewer's
-session format; pins stored in the document are picked up in the sidebar
-while the session is open (exporting pins back into the bundle lands with
-C5). Sessions are read-only once saved: export packets or create a
-new session instead of re-saving. A session opens by itself — it cannot be
-merged with other capture files in one import. The format is
+session format. Pins and saved packets stored in the document appear while
+that session is open (Saved shows the document's records instead of your
+own list, and both never outlive the session), and exporting a session
+writes the currently active pin/saved lists back into the bundle — saved
+references are trimmed to packets the capture still holds, matching
+upstream's import sweep. Sessions are read-only once saved: export packets
+or create a new session instead of re-saving. A session opens by itself —
+it cannot be merged with other capture files in one import. The format is
 byte-compatible with the macOS app, so files interchange both ways.
 
 ## Diff

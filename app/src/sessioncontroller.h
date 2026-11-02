@@ -129,7 +129,7 @@ public:
     QVariantList pinnedItems() const;
     QString selectedPinID() const { return m_selectedPinID; }
     bool savedMode() const { return m_savedMode; }
-    int savedCount() const { return m_savedStore.count(); }
+    int savedCount() const { return activeSavedStore()->count(); }
     QString errorText() const { return m_errorText; }
     QString seededRows() const { return qEnvironmentVariable("TCPVIEWER_SELECT_ROWS"); }
     // Loading state: explicit setLoading() calls OR an import chain in
@@ -282,6 +282,22 @@ private:
         const auto it = m_documentPins.constFind(m_currentSourceID);
         return it != m_documentPins.constEnd() ? &it.value() : &m_pinStore;
     }
+    // Active saved-record store: the document overlay wins while a session-
+    // doc source is open; inside the Saved workspace the scope is the source
+    // the table showed before entering it (upstream SavedPacketService
+    // document scope).
+    SavedPacketStore *activeSavedStore()
+    {
+        const QString scope = m_savedMode ? m_lastNonSavedSourceID : m_currentSourceID;
+        const auto it = m_documentSaved.find(scope);
+        return it != m_documentSaved.end() ? &it.value() : &m_savedStore;
+    }
+    const SavedPacketStore *activeSavedStore() const
+    {
+        const QString scope = m_savedMode ? m_lastNonSavedSourceID : m_currentSourceID;
+        const auto it = m_documentSaved.constFind(scope);
+        return it != m_documentSaved.constEnd() ? &it.value() : &m_savedStore;
+    }
     void handleSessionState(const QVariantMap &data);
     void leaveSavedMode();
     void setError(const QString &message);
@@ -296,6 +312,10 @@ private:
     QHash<QString, PinStore> m_documentPins;
     QString m_selectedPinID;
     SavedPacketStore m_savedStore;
+    // Document-scoped saved records (upstream SavedPacketService
+    // useDocumentRecords): a session bundle's records replace the persistent
+    // starred list while its source is open, and are never persisted here.
+    QHash<QString, SavedPacketStore> m_documentSaved;
     bool m_savedMode = false;
     // Saved workspace re-entry: the source the packets table showed before
     // "Saved" was selected.

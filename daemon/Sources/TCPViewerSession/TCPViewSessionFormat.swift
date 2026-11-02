@@ -301,8 +301,43 @@ public struct SessionPinRecord: Codable, Equatable {
     }
 }
 
+/// Upstream SavedPacketRecord (SavedPacketService) Codable mirror. `packet`
+/// embeds the full PacketSummary exactly as the macOS app's auto-Codable
+/// writes it (camelCase keys, iso8601 savedAt in both directions), so the
+/// apps read each other's bundles.
 public struct SessionSavedPacketRecord: Codable, Equatable {
-    public init() {}
+    public let id: String
+    public let savedAt: Date
+    public let backingIdentity: String?
+    public let packet: PacketSummary
+
+    public init(
+        id: String,
+        savedAt: Date,
+        backingIdentity: String? = nil,
+        packet: PacketSummary
+    ) {
+        self.id = id
+        self.savedAt = savedAt
+        self.backingIdentity = backingIdentity
+        self.packet = packet
+    }
+}
+
+/// Slim export reference the desktop client sends with file.export_session.
+/// Client rows are presentation snapshots, so the daemon resolves `id`
+/// against the exported source's own PacketSummary — comment/style state
+/// rides the source the same way the annotations sidecar does.
+public struct SessionSavedPacketReference: Codable, Equatable {
+    public let id: String
+    public let savedAt: Date
+    public let backingIdentity: String?
+
+    public init(id: String, savedAt: Date, backingIdentity: String? = nil) {
+        self.id = id
+        self.savedAt = savedAt
+        self.backingIdentity = backingIdentity
+    }
 }
 
 public struct SessionCustomFilterRecord: Codable, Equatable {

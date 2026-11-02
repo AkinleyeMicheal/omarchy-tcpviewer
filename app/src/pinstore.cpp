@@ -43,6 +43,34 @@ PinRecord PinRecord::fromMap(const QVariantMap &map)
     return pin;
 }
 
+QVariantMap PinRecord::toSessionMap() const
+{
+    // Upstream PacketPin auto-Codable wire shape (camelCase keys, ISO-8601
+    // createdAt) — file.export_session's pins parameter decodes through the
+    // session JSON codec on the daemon side. Fields scope to the pin kind
+    // like upstream's per-kind upserts; empty optionals stay absent.
+    QVariantMap map;
+    map.insert(QStringLiteral("id"), id);
+    map.insert(QStringLiteral("kind"), kind);
+    map.insert(QStringLiteral("title"), title);
+    if (createdAtMs > 0)
+        map.insert(QStringLiteral("createdAt"), QDateTime::fromMSecsSinceEpoch(createdAtMs)
+            .toUTC().toString(QStringLiteral("yyyy-MM-dd'T'HH:mm:ss'Z'")));
+    if (kind == QStringLiteral("domain") && !domain.isEmpty())
+        map.insert(QStringLiteral("domain"), domain);
+    if (kind == QStringLiteral("ip") && !ip.isEmpty())
+        map.insert(QStringLiteral("ipAddress"), ip);
+    if (kind == QStringLiteral("client")) {
+        if (!clientKey.isEmpty())
+            map.insert(QStringLiteral("clientKey"), clientKey);
+        if (!clientDisplay.isEmpty())
+            map.insert(QStringLiteral("clientDisplayName"), clientDisplay);
+        if (!iconPath.isEmpty())
+            map.insert(QStringLiteral("clientIconFilePath"), iconPath);
+    }
+    return map;
+}
+
 PinRecord PinStore::upsert(const PinRecord &pin)
 {
     // Upstream upsertClientPin/upsertDomainPin: dedupe happens on the stable
