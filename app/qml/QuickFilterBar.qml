@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Omarchy.TCPViewer
+import "BuilderFormat.js" as BuilderFormat
 
 // Quick filter chips and the display-filter field (PacketQuickFilterViewController
 // and the upstream display filter). Chips are local predicates in the daemon;
@@ -20,10 +21,29 @@ Rectangle {
     }
 
     // Save-as dialog state: the expression captured when the dialog opens, so
-    // editing the field afterwards cannot save a mismatched query.
+    // editing the field afterwards cannot save a mismatched query. The dialog
+    // also saves structured presets (mode "builder" captures the popup rows).
     property string pendingSaveQuery: ""
+    property string pendingSaveMode: "expression"  // "expression" | "builder"
 
     function commitSaveFilter() {
+        if (pendingSaveMode === "builder") {
+            // activeBuilderRecords() records numeric validation failures in
+            // builderError; surface that before the controller's name check.
+            if (root.builderError.length > 0) {
+                errorLabel.text = root.builderError
+                return
+            }
+            const error = session.saveStructuredFilter(nameField.text,
+                activeBuilderRecords(), root.builderMatchAny ? "or" : "and")
+            if (error.length > 0) {
+                errorLabel.text = error
+                return
+            }
+            saveFilterPopup.close()
+            filterBuilderPopup.close()
+            return
+        }
         const error = session.saveFilter(nameField.text, pendingSaveQuery)
         if (error.length > 0) {
             errorLabel.text = error
@@ -33,24 +53,13 @@ Rectangle {
     }
 
     // ---- Structured filter builder (upstream PacketStructuredFilterViewController) ----
-    // Rows compile into a Wireshark display filter, which the daemon already
-    // evaluates, so the builder needs no daemon changes.
-    readonly property var builderFields: [
-        { id: "any", label: "Any Text", field: "frame", kind: "text", hint: "text to search for", containsOnly: true },
-        { id: "protocol", label: "Protocol", field: "frame.protocols", kind: "text", hint: "tcp, udp, http, dns…", containsOnly: true, lowercase: true },
-        { id: "ipAddr", label: "IP Address", field: "ip.addr", kind: "ip", hint: "10.0.0.5 or 10.0.0.0/24" },
-        { id: "ipSrc", label: "Source IP", field: "ip.src", kind: "ip", hint: "10.0.0.5" },
-        { id: "ipDst", label: "Destination IP", field: "ip.dst", kind: "ip", hint: "203.0.113.10" },
-        { id: "ipv6Addr", label: "IPv6 Address", field: "ipv6.addr", kind: "ip", hint: "2001:db8::1" },
-        { id: "tcpPort", label: "TCP Port", field: "tcp.port", kind: "numeric", max: 65535, hint: "443" },
-        { id: "tcpSrcPort", label: "TCP Source Port", field: "tcp.srcport", kind: "numeric", max: 65535, hint: "443" },
-        { id: "tcpDstPort", label: "TCP Dest. Port", field: "tcp.dstport", kind: "numeric", max: 65535, hint: "443" },
-        { id: "udpPort", label: "UDP Port", field: "udp.port", kind: "numeric", max: 65535, hint: "53" },
-        { id: "httpHost", label: "HTTP Host", field: "http.host", kind: "string", hint: "example.com" },
-        { id: "dnsName", label: "DNS Name", field: "dns.qry.name", kind: "string", hint: "example.com" },
-        { id: "tlsSni", label: "TLS Server Name", field: "tls.handshake.extensions_server_name", kind: "string", hint: "example.com" },
-        { id: "length", label: "Packet Length", field: "frame.len", kind: "numeric", hint: "1400" }
-    ]
+    // Rows are semantic conditions the daemon evaluates per packet (upstream
+    // builder engine, PacketStructuredFilterGroup): client, stream and flags
+    // rows have no Wireshark translation, so the builder no longer compiles
+    // a display filter. The display-filter field above stays separate.
+    // Field/condition vocabulary lives in BuilderFormat.js (shared with the
+    // sidebar's saved presets); field ids match the daemon's IPC contract.
+    readonly property var builderFields: BuilderFormat.FIELDS
 
     property bool builderMatchAny: false
     property string builderPreview: ""
@@ -65,92 +74,50 @@ Rectangle {
         return builderFields[0]
     }
 
+    // Upstream PacketStructuredFilterCondition order; < and >= ride along
+    // only on fields that expose numbers (the shared vocabulary enforces it).
     function builderConditionsFor(fieldId) {
-        var field = builderFieldById(fieldId)
-        if (!field)
-            return []
-        if (field.kind === "numeric")
-            return [
-                { id: "is", label: "is", op: "==" },
-                { id: "isNot", label: "is not", op: "!=" },
-                { id: "less", label: "less than", op: "<" },
-                { id: "lessEqual", label: "≤", op: "<=" },
-                { id: "greater", label: "greater than", op: ">" },
-                { id: "greaterEqual", label: "≥", op: ">=" }
-            ]
-        if (field.kind === "ip")
-            return [
-                { id: "is", label: "is", op: "==" },
-                { id: "isNot", label: "is not", op: "!=" }
-            ]
-        if (field.containsOnly)
-            return [
-                { id: "contains", label: "contains", op: "contains" },
-                { id: "notContains", label: "does not contain", op: "notContains" }
-            ]
-        return [
-            { id: "is", label: "is", op: "==" },
-            { id: "isNot", label: "is not", op: "!=" },
-            { id: "contains", label: "contains", op: "contains" },
-            { id: "notContains", label: "does not contain", op: "notContains" }
-        ]
+        return BuilderFormat.conditionsFor(fieldId)
     }
 
     function builderConditionById(fieldId, conditionId) {
-        var conditions = builderConditionsFor(fieldId)
-        for (var i = 0; i < conditions.length; ++i) {
-            if (conditions[i].id === conditionId)
-                return conditions[i]
-        }
-        return conditions.length > 0 ? conditions[0] : null
+        return BuilderFormat.conditionById(fieldId, conditionId)
     }
 
-    function escapeFilterValue(value) {
-        return String(value).replace(/\\/g, "\\\\").replace(/"/g, "\\\"")
+    // The summary is readability only: the daemon receives the row objects.
+    // Disabled rows are annotated so the preview shows what will be skipped.
+    function builderRowSummary(row) {
+        return BuilderFormat.rowSummary({
+            field: row.fieldId,
+            condition: row.condId,
+            text: String(row.rowValue || "").trim(),
+            enabled: row.rowEnabled
+        })
     }
 
-    function builderRowExpression(row) {
-        var field = builderFieldById(row.fieldId)
-        var condition = builderConditionById(row.fieldId, row.condId)
-        var value = String(row.rowValue || "").trim()
-        if (!field || !condition || value.length === 0)
-            return ""
-        if (condition.op === "contains" || condition.op === "notContains") {
-            var target = field.lowercase ? "lower(" + field.field + ")" : field.field
-            var needle = field.lowercase ? value.toLowerCase() : value
-            var contains = target + " contains \"" + escapeFilterValue(needle) + "\""
-            return condition.op === "contains" ? contains : "!(" + contains + ")"
-        }
-        if (field.kind === "numeric" || field.kind === "ip")
-            return field.field + " " + condition.op + " " + value
-        return field.field + " " + condition.op + " \"" + escapeFilterValue(value) + "\""
-    }
-
-    function builderExpression() {
-        var parts = []
+    function builderSummary() {
+        var records = []
         for (var i = 0; i < builderModel.count; ++i) {
-            var expression = builderRowExpression(builderModel.get(i))
-            if (expression.length > 0)
-                parts.push(expression)
+            var row = builderModel.get(i)
+            records.push({
+                field: row.fieldId,
+                condition: row.condId,
+                text: String(row.rowValue || "").trim(),
+                enabled: row.rowEnabled
+            })
         }
-        if (parts.length === 0)
-            return ""
-        if (parts.length === 1)
-            return parts[0]
-        for (var j = 0; j < parts.length; ++j)
-            parts[j] = "(" + parts[j] + ")"
-        return parts.join(builderMatchAny ? " || " : " && ")
+        return BuilderFormat.summaryFor(records, root.builderMatchAny ? "or" : "and")
     }
 
     function refreshBuilder() {
         builderError = ""
-        builderPreview = builderExpression()
+        builderPreview = builderSummary()
     }
 
     function addBuilderRow() {
         if (builderModel.count >= 5)
             return
-        builderModel.append({ fieldId: "any", condId: "contains", rowValue: "" })
+        builderModel.append({ fieldId: "urlDomain", condId: "contains", rowValue: "", rowEnabled: true })
         refreshBuilder()
     }
 
@@ -158,39 +125,70 @@ Rectangle {
         filterBuilderPopup.open()
     }
 
-    function applyBuilder() {
+    // Enabled non-blank rows are the ones that reach the daemon (upstream
+    // isActive = enabled && non-empty).
+    function activeBuilderRecords() {
+        builderError = ""
+        var rows = []
         for (var i = 0; i < builderModel.count; ++i) {
             var row = builderModel.get(i)
             var value = String(row.rowValue || "").trim()
+            if (!row.rowEnabled || value.length === 0)
+                continue
             var field = builderFieldById(row.fieldId)
-            if (value.length === 0) {
-                builderError = "Enter a value for every condition."
-                return
-            }
             if (field.kind === "numeric" && !/^\d+$/.test(value)) {
                 builderError = "Enter a number for " + field.label + "."
-                return
+                return []
             }
-            if (field.max !== undefined && Number(value) > field.max) {
-                builderError = field.label + " must be at most " + field.max + "."
-                return
-            }
+            rows.push({
+                field: row.fieldId,
+                condition: row.condId,
+                text: value,
+                enabled: true
+            })
         }
-        var expression = builderExpression()
-        if (expression.length === 0) {
-            builderError = "Add at least one condition."
-            return
-        }
-        filterBuilderPopup.close()
-        session.applyFilter(expression)
+        return rows
     }
 
-    // CI screenshot helper: seed two representative conditions.
+    function applyBuilder() {
+        var rows = activeBuilderRecords()
+        if (builderError.length > 0)
+            return
+        // Nothing active clears the structured stage (the daemon treats an
+        // empty group as "match all").
+        session.setStructuredFilter(rows, root.builderMatchAny ? "or" : "and")
+        filterBuilderPopup.close()
+    }
+
+    // CI screenshot helper: seed two representative conditions (a string
+    // contains and a numeric comparison) to review the row UI.
     function seedBuilderDemo() {
         builderModel.clear()
-        builderModel.append({ fieldId: "tcpDstPort", condId: "is", rowValue: "80" })
-        builderModel.append({ fieldId: "httpHost", condId: "contains", rowValue: "example.com" })
+        builderModel.append({ fieldId: "urlDomain", condId: "contains", rowValue: "example", rowEnabled: true })
+        builderModel.append({ fieldId: "destinationPort", condId: "lessThan", rowValue: "65535", rowEnabled: true })
         refreshBuilder()
+    }
+
+    // The popup mirrors the session's active builder state (restore on open
+    // for app restarts with seeded filters and for saved-structured loads).
+    function restoreBuilderFromSession() {
+        builderModel.clear()
+        var rows = session.structuredRows
+        if (rows.length === 0) {
+            root.addBuilderRow()
+            return
+        }
+        for (var i = 0; i < rows.length && i < 5; ++i) {
+            var row = rows[i]
+            builderModel.append({
+                fieldId: String(row.field || "urlDomain"),
+                condId: String(row.condition || "contains"),
+                rowValue: String(row.text || ""),
+                rowEnabled: row.enabled !== false
+            })
+        }
+        root.builderMatchAny = session.structuredJoin === "or"
+        root.refreshBuilder()
     }
 
     property var selectedIDs: []
@@ -344,12 +342,15 @@ Rectangle {
         }
 
         Rectangle {
+            id: filterCell
             Layout.preferredWidth: 270
             Layout.preferredHeight: 24
             radius: 6
             color: Theme.windowBackground
             border.width: 1
-            border.color: filterField.activeFocus ? Theme.accent : Theme.separator
+            border.color: session.filterErrorText.length > 0
+                ? Theme.systemRed
+                : (filterField.activeFocus ? Theme.accent : Theme.separator)
 
             TextField {
                 id: filterField
@@ -362,13 +363,64 @@ Rectangle {
                 verticalAlignment: TextInput.AlignVCenter
                 placeholderText: "Display filter"
                 placeholderTextColor: Theme.secondaryLabel
-                color: Theme.label
-                selectionColor: Theme.accent
+                color: session.filterErrorText.length > 0 ? Theme.systemRed : Theme.label
+                selectionColor: Theme.systemRed
                 selectedTextColor: "white"
                 font.family: Theme.monoFont
                 font.pixelSize: Theme.uiSmall
                 selectByMouse: true
                 onAccepted: root.session.applyFilter(text)
+
+                // Invalid expressions select the offending span (upstream
+                // selects the DisplayFilterDiagnostic range); the revert in
+                // the controller keeps the group working while the field
+                // keeps the draft text.
+                function applyErrorSpan() {
+                    const span = session.filterErrorSpan
+                    if (!span || span.start === undefined)
+                        return
+                    const start = span.start
+                    if (start < 0 || start > text.length)
+                        return
+                    const length = span.length !== undefined ? span.length : 0
+                    filterField.cursorPosition = start
+                    if (length > 0)
+                        select(start, Math.min(start + length, text.length))
+                }
+
+                ToolTip {
+                    id: filterErrorTip
+                    visible: false
+                    timeout: 6000
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.uiSmall
+                    background: Rectangle {
+                        color: Theme.windowBackground
+                        border.width: 1
+                        border.color: Theme.systemRed
+                        radius: 6
+                    }
+                    contentItem: Text {
+                        text: root.session.filterErrorText
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.uiSmall
+                        color: Theme.systemRed
+                        elide: Text.ElideRight
+                    }
+                }
+
+                Connections {
+                    target: session
+
+                    function onFilterErrorChanged() {
+                        if (root.session.filterErrorText.length > 0) {
+                            filterField.applyErrorSpan()
+                            filterErrorTip.visible = true
+                        } else {
+                            filterErrorTip.visible = false
+                        }
+                    }
+                }
 
                 Connections {
                     target: root.session
@@ -491,6 +543,9 @@ Rectangle {
         onOpened: {
             nameField.text = ""
             errorLabel.text = ""
+            // Title reflects what gets saved (display filter vs preset).
+            titleLabel.text = root.pendingSaveMode === "builder"
+                ? "Save builder preset" : "Save display filter"
             nameField.forceActiveFocus()
         }
 
@@ -498,6 +553,7 @@ Rectangle {
             spacing: 8
 
             Text {
+                id: titleLabel
                 text: "Save display filter"
                 font.family: Theme.uiFont
                 font.pixelSize: Theme.uiSmall
@@ -585,8 +641,7 @@ Rectangle {
         }
 
         onOpened: {
-            if (builderModel.count === 0)
-                root.addBuilderRow()
+            root.restoreBuilderFromSession()
             root.refreshBuilder()
         }
 
@@ -645,13 +700,29 @@ Rectangle {
                         required property string fieldId
                         required property string condId
                         required property string rowValue
+                        required property bool rowEnabled
 
                         Layout.fillWidth: true
                         spacing: 6
 
+                        // Upstream leading isEnabled toggle: disabled rows
+                        // stay in the builder (values preserved) but stop
+                        // contributing to the applied group.
+                        RowCheck {
+                            checked: builderRow.rowEnabled
+                            hoverText: builderRow.rowEnabled
+                                ? "Condition enabled" : "Condition disabled"
+                            onToggled: {
+                                builderModel.setProperty(builderRow.index, "rowEnabled",
+                                                         !builderRow.rowEnabled)
+                                root.refreshBuilder()
+                            }
+                        }
+
                         FilterCombo {
                             id: fieldCombo
-                            Layout.preferredWidth: 172
+                            Layout.preferredWidth: 164
+                            opacity: builderRow.rowEnabled ? 1 : 0.5
                             options: root.builderFields
                             selectedId: builderRow.fieldId
                             onSelected: function(id) {
@@ -667,7 +738,8 @@ Rectangle {
 
                         FilterCombo {
                             id: condCombo
-                            Layout.preferredWidth: 146
+                            Layout.preferredWidth: 140
+                            opacity: builderRow.rowEnabled ? 1 : 0.5
                             options: root.builderConditionsFor(builderRow.fieldId)
                             selectedId: builderRow.condId
                             onSelected: function(id) {
@@ -681,6 +753,7 @@ Rectangle {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 26
                             radius: 6
+                            opacity: builderRow.rowEnabled ? 1 : 0.5
                             color: Theme.windowBackground
                             border.width: 1
                             border.color: valueField.activeFocus ? Theme.accent : Theme.separator
@@ -783,7 +856,7 @@ Rectangle {
                     elide: Text.ElideRight
                     text: root.builderPreview.length > 0
                         ? root.builderPreview
-                        : "The generated display filter appears here"
+                        : "The filter summary appears here"
                     font.family: Theme.monoFont
                     font.pixelSize: Theme.uiSmall
                     color: root.builderPreview.length > 0 ? Theme.label : Theme.secondaryLabel
@@ -804,6 +877,15 @@ Rectangle {
                 Layout.alignment: Qt.AlignRight
                 spacing: 8
 
+                DialogButton {
+                    text: "Save preset…"
+                    onClicked: {
+                        //Validation still happens at commit time
+                        root.pendingSaveMode = "builder"
+                        root.pendingSaveQuery = ""
+                        saveFilterPopup.open()
+                    }
+                }
                 DialogButton {
                     text: "Cancel"
                     onClicked: filterBuilderPopup.close()
@@ -851,6 +933,44 @@ Rectangle {
             anchors.fill: parent
             hoverEnabled: true
             onClicked: button.clicked()
+        }
+    }
+
+    // Small per-row enable checkbox for the builder (upstream isEnabled).
+    component RowCheck: Rectangle {
+        id: rowCheck
+
+        property bool checked: true
+        property string hoverText: ""
+        signal toggled
+
+        implicitWidth: 18
+        implicitHeight: 26
+        radius: 4
+        color: "transparent"
+        border.width: 1
+        border.color: rowCheck.checked ? Theme.accent : Theme.separator
+
+        Text {
+            anchors.centerIn: parent
+            text: "✓"
+            font.pixelSize: 12
+            font.weight: Font.DemiBold
+            color: Theme.accent
+            visible: rowCheck.checked
+        }
+
+        ToolTip.visible: rowCheckMouse.containsMouse && rowCheck.hoverText.length > 0
+        ToolTip.text: rowCheck.hoverText
+        ToolTip.delay: 500
+
+        MouseArea {
+            id: rowCheckMouse
+            anchors.fill: parent
+            anchors.margins: -3
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: rowCheck.toggled()
         }
     }
 

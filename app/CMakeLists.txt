@@ -54,6 +54,7 @@ set_source_files_properties(qml/OverviewTrafficRows.qml PROPERTIES QT_RESOURCE_A
 set_source_files_properties(qml/OverviewTCPAnalysis.qml PROPERTIES QT_RESOURCE_ALIAS OverviewTCPAnalysis.qml)
 set_source_files_properties(qml/OverviewLengthsChart.qml PROPERTIES QT_RESOURCE_ALIAS OverviewLengthsChart.qml)
 set_source_files_properties(qml/OverviewFormat.js PROPERTIES QT_RESOURCE_ALIAS OverviewFormat.js)
+set_source_files_properties(qml/BuilderFormat.js PROPERTIES QT_RESOURCE_ALIAS BuilderFormat.js)
 set_source_files_properties(qml/Theme.qml PROPERTIES
     QT_RESOURCE_ALIAS Theme.qml
     QT_QML_SINGLETON_TYPE TRUE
@@ -73,6 +74,7 @@ qt_add_qml_module(omarchy-tcpviewer
         qml/OverviewTCPAnalysis.qml
         qml/OverviewLengthsChart.qml
         qml/OverviewFormat.js
+        qml/BuilderFormat.js
         qml/PacketTableListView.qml
         qml/PacketTableView.qml
         qml/Sidebar.qml

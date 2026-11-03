@@ -204,7 +204,10 @@ void DaemonClient::handleLine(const QByteArray &line)
     const QString code = error.value(QStringLiteral("code")).toString(QStringLiteral("unknown"));
     const QString message = error.value(QStringLiteral("message"))
         .toString(QStringLiteral("Unknown daemon error."));
-    emit failure(command, code, message);
+    // Failure payloads (display-filter spans, partial imports) ride the
+    // top-level data field.
+    const QVariantMap data = object.value(QStringLiteral("data")).toObject().toVariantMap();
+    emit failure(command, code, message, data);
     emit requestFailure(requestID, command, code, message);
 }
 

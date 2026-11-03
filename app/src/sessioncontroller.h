@@ -61,6 +61,11 @@ class SessionController : public QObject
     // Reflects both QML clicks and startup hooks, so chips can highlight the
     // truth rather than their own local state.
     Q_PROPERTY(QStringList quickFilters READ quickFilters NOTIFY quickFiltersChanged)
+    // Structured builder state shared with the daemon per request (upstream
+    // PacketStructuredFilterGroup): semantic rows the builder popup edits.
+    // Absent rows mean "no structured filter stage".
+    Q_PROPERTY(QVariantList structuredRows READ structuredRows NOTIFY structuredFilterChanged)
+    Q_PROPERTY(QString structuredJoin READ structuredJoin NOTIFY structuredFilterChanged)
     // Sidebar Favorites (upstream PacketSourceListService): pinned display-
     // filter expressions and named saved filters, persisted in QSettings next
     // to the overview card layout.
@@ -124,6 +129,15 @@ public:
     void setSelectedInterface(const QString &interfaceID);
     QString filterText() const { return m_filterText; }
     QStringList quickFilters() const { return m_quickFilters; }
+    Q_PROPERTY(QString filterErrorText READ filterErrorText NOTIFY filterErrorChanged)
+    Q_PROPERTY(QVariantMap filterErrorSpan READ filterErrorSpan NOTIFY filterErrorChanged)
+    QVariantList structuredRows() const { return m_structuredRows; }
+    QString structuredJoin() const { return m_structuredJoin; }
+    // Display-filter validation errors (upstream PacketWiresharkFilterState):
+    // the diagnostic message plus the byte range it selects. Cleared when a
+    // new expression is applied.
+    QString filterErrorText() const { return m_filterErrorText; }
+    QVariantMap filterErrorSpan() const { return m_filterErrorSpan; }
     QStringList pinnedFilters() const { return m_pinnedFilters; }
     QVariantList savedFilters() const { return m_savedFilters; }
     QVariantList pinnedItems() const;
@@ -166,6 +180,17 @@ public:
     Q_INVOKABLE void clearPackets();
     Q_INVOKABLE void applyFilter(const QString &filter);
     Q_INVOKABLE void setQuickFilters(const QVariantList &quickFilters);
+
+    // Builder rows ([{field, condition, text, enabled}]) sent on every
+    // packets.list request, mirroring quick filters. An empty list clears
+    // the stage. join is "and"|"or" (default and).
+    Q_INVOKABLE void setStructuredFilter(const QVariantList &rows, const QString &join);
+
+    // Named structured-builder presets (upstream PacketCustomFilterService
+    // mode .builder): validated like saveFilter; name-keyed replace.
+    Q_INVOKABLE QString saveStructuredFilter(const QString &name,
+                                             const QVariantList &rows,
+                                             const QString &join);
 
     // Packet annotations (upstream row context menu): highlight color,
     // strikethrough and the TCP Viewer comment. Single-row in C1 — bulk
@@ -235,7 +260,11 @@ signals:
     void currentSourceChanged();
     void selectedInterfaceChanged();
     void filterTextChanged();
+    void filterErrorChanged();
+
     void quickFiltersChanged();
+    void structuredFilterChanged();
+
     void filtersChanged();
     void pinsChanged();
     void savedModeChanged();
@@ -261,7 +290,8 @@ private:
                                   const QVariantMap &data);
     void handleResponseRequestFailure(const QString &requestID, const QString &command,
                                       const QString &code, const QString &message);
-    void handleFailure(const QString &command, const QString &code, const QString &message);
+    void handleFailure(const QString &command, const QString &code,
+                       const QString &message, const QVariantMap &data);
     void handleEvent(const QString &name, const QVariantMap &data);
     void handlePackets(const QVariantMap &data);
     void setStatus(const QVariantMap &status);
@@ -301,6 +331,7 @@ private:
     void handleSessionState(const QVariantMap &data);
     void leaveSavedMode();
     void setError(const QString &message);
+    void setFilterError(const QString &text, const QVariantMap &span);
     void setLoading(bool loading);
     void setStopInFlight(bool stopInFlight);
     void setTotalCount(int total);
@@ -348,6 +379,11 @@ private:
     QString m_errorText;
     QString m_pendingSelectPath;
     QStringList m_quickFilters;
+    QString m_filterErrorText;
+    QVariantMap m_filterErrorSpan;
+    QString m_previousFilter;
+    QVariantList m_structuredRows;
+    QString m_structuredJoin;
     QStringList m_pinnedFilters;
     QVariantList m_savedFilters;
     bool m_loading = false;

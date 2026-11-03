@@ -94,6 +94,28 @@ SessionController::SessionController(QObject *parent)
         if (!id.isEmpty())
             m_quickFilters.append(id);
     }
+    // CI/test hook: seed the structured builder stage (TCPVIEWER_STRUCTURED),
+    // rows separated by ';' with 'field|condition|text|enabled' each; the
+    // join comes from TCPVIEWER_STRUCTURED_JOIN ("and"/"or", default and).
+    const QString structuredHook = qEnvironmentVariable("TCPVIEWER_STRUCTURED");
+    if (!structuredHook.trimmed().isEmpty()) {
+        const QStringList parts = structuredHook.split(u';', Qt::SkipEmptyParts);
+        for (const QString &part : parts) {
+            const QStringList fields = part.split(u'|');
+            if (fields.size() < 3)
+                continue;
+            QVariantMap row{
+                {QStringLiteral("field"), fields.at(0).trimmed()},
+                {QStringLiteral("condition"), fields.at(1).trimmed()},
+                {QStringLiteral("text"), fields.at(2).trimmed()},
+                {QStringLiteral("enabled"),
+                 fields.size() < 4 || fields.at(3).trimmed() != QStringLiteral("0")},
+            };
+            m_structuredRows.append(row);
+        }
+        m_structuredJoin = qEnvironmentVariable("TCPVIEWER_STRUCTURED_JOIN")
+            == QStringLiteral("or") ? QStringLiteral("or") : QStringLiteral("and");
+    }
 
     // Sidebar Favorites (upstream PacketCustomFilterService): pinned display
     // filters and named saved filters live in QSettings alongside the
@@ -108,11 +130,32 @@ SessionController::SessionController(QObject *parent)
             settings.setArrayIndex(i);
             const QString name =
                 settings.value(QStringLiteral("name")).toString().trimmed();
+            const QString mode =
+                settings.value(QStringLiteral("mode")).toString();
+            if (mode == QStringLiteral("builder")) {
+                const QVariantList rows =
+                    settings.value(QStringLiteral("rows")).toList();
+                const QString join =
+                    settings.value(QStringLiteral("join")).toString();
+                if (!name.isEmpty() && !rows.isEmpty()) {
+                    m_savedFilters.append(QVariantMap{
+                        {QStringLiteral("name"), name},
+                        {QStringLiteral("mode"), QStringLiteral("builder")},
+                        {QStringLiteral("rows"), rows},
+                        {QStringLiteral("join"),
+                         join == QStringLiteral("or") ? QStringLiteral("or")
+                                                      : QStringLiteral("and")},
+                    });
+                }
+                continue;
+            }
             const QString query =
                 settings.value(QStringLiteral("query")).toString().trimmed();
             if (!name.isEmpty() && !query.isEmpty()) {
                 m_savedFilters.append(QVariantMap{
                     {QStringLiteral("name"), name},
+                    // Legacy entries predate the mode field (all expressions).
+                    {QStringLiteral("mode"), QStringLiteral("expression")},
                     {QStringLiteral("query"), query},
                 });
             }
@@ -619,6 +662,12 @@ void SessionController::applyFilter(const QString &filter)
         resetStream();
         return;
     }
+    // Applying starts a new validation cycle: drop any stale error state.
+    setFilterError(QString(), QVariantMap());
+    // Snapshot for display-filter reverts: an invalid expression is refused
+    // by the daemon (which also drops its own index), so the request state
+    // goes back to the last valid expression while the field keeps the draft.
+    m_previousFilter = m_filterText;
     clearSelection();
     setFilterTextInternal(filter);
     resetStream();
@@ -637,6 +686,29 @@ void SessionController::setQuickFilters(const QVariantList &quickFilters)
     clearSelection();
     m_quickFilters = next;
     emit quickFiltersChanged();
+    resetStream();
+}
+
+// Builder rows flow to the daemon as-is (field/condition/text/enabled);
+// validation lives in the daemon (unknown field/condition → query error).
+// Rows absent or stateless → the request omits the structured stage.
+void SessionController::setStructuredFilter(const QVariantList &rows, const QString &join)
+{
+    QVariantList next;
+    for (const QVariant &value : rows) {
+        const QVariantMap map = value.toMap();
+        if (map.value(QStringLiteral("field")).toString().isEmpty()
+            || map.value(QStringLiteral("condition")).toString().isEmpty())
+            continue;
+        next.append(map);
+    }
+    const QString nextJoin = join == QStringLiteral("or") ? QStringLiteral("or") : QStringLiteral("and");
+    if (next == m_structuredRows && nextJoin == m_structuredJoin)
+        return;
+    clearSelection();
+    m_structuredRows = next;
+    m_structuredJoin = nextJoin;
+    emit structuredFilterChanged();
     resetStream();
 }
 
@@ -724,10 +796,71 @@ void SessionController::persistSavedFilters()
         const QVariantMap map = m_savedFilters.at(i).toMap();
         settings.setValue(QStringLiteral("name"),
                           map.value(QStringLiteral("name")));
-        settings.setValue(QStringLiteral("query"),
-                          map.value(QStringLiteral("query")));
+        settings.setValue(QStringLiteral("mode"),
+                          map.value(QStringLiteral("mode"),
+                                    QStringLiteral("expression")));
+        if (map.value(QStringLiteral("mode")).toString() == QStringLiteral("builder")) {
+            settings.setValue(QStringLiteral("rows"), map.value(QStringLiteral("rows")));
+            settings.setValue(QStringLiteral("join"), map.value(QStringLiteral("join")));
+        } else {
+            settings.setValue(QStringLiteral("query"),
+                              map.value(QStringLiteral("query")));
+        }
     }
     settings.endArray();
+}
+
+// Structured presets (upstream PacketCustomFilterService.save(mode: .builder)):
+// same name validation as expressions; a re-save under the same name replaces
+// the payload. Rows carry {field, condition, text, enabled} keyed by the
+// daemon's structured IPC contract.
+QString SessionController::saveStructuredFilter(const QString &name,
+                                                const QVariantList &rows,
+                                                const QString &join)
+{
+    const QString trimmedName = name.trimmed();
+    if (trimmedName.isEmpty())
+        return QStringLiteral("Enter a filter name.");
+    if (trimmedName.size() > 40)
+        return QStringLiteral("Filter names must be 40 characters or fewer.");
+
+    QVariantList payloadRows;
+    for (const QVariant &value : rows) {
+        const QVariantMap map = value.toMap();
+        if (map.value(QStringLiteral("field")).toString().isEmpty()
+            || map.value(QStringLiteral("condition")).toString().isEmpty())
+            continue;
+        payloadRows.append(map);
+    }
+    if (payloadRows.isEmpty())
+        return QStringLiteral("Build at least one condition first.");
+
+    bool replaced = false;
+    for (QVariant &entry : m_savedFilters) {
+        QVariantMap map = entry.toMap();
+        if (map.value(QStringLiteral("mode")).toString() == QStringLiteral("builder")
+            && map.value(QStringLiteral("name")).toString() == trimmedName) {
+            map.insert(QStringLiteral("rows"), payloadRows);
+            map.insert(QStringLiteral("join"),
+                       join == QStringLiteral("or") ? QStringLiteral("or")
+                                                    : QStringLiteral("and"));
+            entry = map;
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced) {
+        m_savedFilters.append(QVariantMap{
+            {QStringLiteral("name"), trimmedName},
+            {QStringLiteral("mode"), QStringLiteral("builder")},
+            {QStringLiteral("rows"), payloadRows},
+            {QStringLiteral("join"),
+             join == QStringLiteral("or") ? QStringLiteral("or") : QStringLiteral("and")},
+        });
+    }
+    persistSavedFilters();
+    emit filtersChanged();
+    return QString();
 }
 
 // MARK: - Pinned sources + saved packets (C2)
@@ -1148,6 +1281,13 @@ void SessionController::requestPackets(bool firstPage)
     // source-sticky, but re-sending it is idempotent.
     params.insert(QStringLiteral("filter"), m_filterText);
     params.insert(QStringLiteral("quick_filters"), m_quickFilters);
+    // Structured builder rows are per-request state too; every follow-up
+    // page must carry them or catch-up pages refill with unfiltered rows.
+    if (!m_structuredRows.isEmpty()) {
+        params.insert(QStringLiteral("structured"), m_structuredRows);
+        if (m_structuredJoin == QStringLiteral("or"))
+            params.insert(QStringLiteral("structured_join"), QStringLiteral("or"));
+    }
     if (firstPage) {
         params.insert(QStringLiteral("offset"), 0);
     } else {
@@ -1185,6 +1325,9 @@ void SessionController::handleResponseRequestFailure(const QString &requestID,
 
 void SessionController::handleResponse(const QString &command, const QVariantMap &data)
 {
+    // The filter error state clears when a new expression is applied (see
+    // applyFilter), not on page replies: reverting after an invalid filter
+    // also produces a successful packets.list and must not undo it.
     if (command == QStringLiteral("file.export")
         || command == QStringLiteral("file.export_session")) {
         setLoading(false);
@@ -1400,7 +1543,39 @@ void SessionController::handlePackets(const QVariantMap &data)
         setLoading(false);
 }
 
-void SessionController::handleFailure(const QString &command, const QString &code, const QString &message)
+void SessionController::setFilterError(const QString &text, const QVariantMap &span)
+{
+    if (m_filterErrorText == text && m_filterErrorSpan == span)
+        return;
+    m_filterErrorText = text;
+    m_filterErrorSpan = span;
+    emit filterErrorChanged();
+}
+
+// Byte spans arrive in UTF-8 offsets from Wireshark; the field edits QString,
+// so convert to UTF-16 code-unit positions (clamped).
+static qsizetype utf8ToUtf16Position(const QString &text, qsizetype utf8Start)
+{
+    if (utf8Start <= 0)
+        return 0;
+    const QByteArray utf8 = text.toUtf8();
+    const qsizetype clamped = qMin(utf8Start, utf8.size());
+    return QString::fromUtf8(utf8.left(clamped)).size();
+}
+
+static qsizetype utf8ToUtf16Length(const QString &text, qsizetype utf8Start,
+                                   qsizetype utf8Length)
+{
+    if (utf8Length <= 0)
+        return 0;
+    const QByteArray utf8 = text.toUtf8();
+    const qsizetype start = qMin(utf8Start, utf8.size());
+    const QByteArray slice = utf8.mid(start, utf8Length);
+    return qMax<qsizetype>(1, QString::fromUtf8(slice).size());
+}
+
+void SessionController::handleFailure(const QString &command, const QString &code,
+                                      const QString &message, const QVariantMap &data)
 {
     m_requestInFlight = false;
 
@@ -1408,6 +1583,31 @@ void SessionController::handleFailure(const QString &command, const QString &cod
     // "Stopping…"; the status poll still reflects the true phase.
     if (command == QStringLiteral("capture.stop")) {
         setStopInFlight(false);
+    }
+
+    // Display-filter validation failures carry the diagnostic byte span
+    // (upstream DisplayFilterDiagnostic.range). Revert the request filter to
+    // the last valid expression, keep the draft in the field (the text mirror
+    // skips focused fields), and hand the span to the editor for selection.
+    if (command == QStringLiteral("packets.list")
+        && message.startsWith(QStringLiteral("invalid display filter"))) {
+        const QVariantMap span = data.value(QStringLiteral("error_span")).toMap();
+        const QString draft = m_filterText;
+        const qsizetype start =
+            utf8ToUtf16Position(draft, span.value(QStringLiteral("start")).toLongLong());
+        const qsizetype length =
+            utf8ToUtf16Length(draft,
+                              span.value(QStringLiteral("start")).toLongLong(),
+                              span.value(QStringLiteral("length")).toLongLong());
+        setFilterTextInternal(m_previousFilter);
+        clearSelection();
+        resetStream();
+        setFilterError(message, QVariantMap{
+            {QStringLiteral("start"), start},
+            {QStringLiteral("length"), length},
+        });
+        setLoading(false);
+        return;
     }
 
     // Overview fetches fail silently: the page keeps the last snapshot and

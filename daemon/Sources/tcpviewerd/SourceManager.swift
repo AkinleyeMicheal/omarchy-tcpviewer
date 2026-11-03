@@ -971,12 +971,22 @@ final class SourceManager: @unchecked Sendable {
                 }
                 guard validation.status == .valid else {
                     source.displayFilter = nil
-                    let detail = validation.diagnostics.map(\.message).joined(separator: "; ")
-                    return self.fail(
-                        IPCError.invalidParams,
-                        "invalid display filter: \(detail.isEmpty ? validation.normalizedExpression : detail)",
-                        completion
-                    )
+                    // Span metadata rides PayloadError.data (upstream parity:
+                    // DisplayFilterDiagnostic.range so the editor selects the
+                    // offending byte range).
+                    let diagnostic = validation.diagnostics.first
+                    let detail = diagnostic?.message ?? ""
+                    let spanData: [String: IPCValue]? = diagnostic?.range.map { range in
+                        ["error_span": .object([
+                            "start": .int(range.utf8StartOffset),
+                            "length": .int(range.utf8Length),
+                        ])]
+                    }
+                    return completion(.failure(PayloadError(
+                        code: IPCError.invalidParams,
+                        message: "invalid display filter: \(detail.isEmpty ? validation.normalizedExpression : detail)",
+                        data: spanData
+                    )))
                 }
                 source.filterEvaluatedCount = 0
                 source.filterIDs = []
@@ -1088,6 +1098,7 @@ final class SourceManager: @unchecked Sendable {
         limit: Int,
         filter: String?,
         quickFilters: [String]?,
+        structured: PacketStructuredFilterGroup?,
         updatesSince: UInt64?,
         completion: @escaping (Result<PacketQueryResult, Error>) -> Void
     ) {
@@ -1111,6 +1122,7 @@ final class SourceManager: @unchecked Sendable {
                         offset: max(0, offset),
                         limit: min(max(1, limit), 5_000),
                         quick: quickFilters ?? [],
+                        structured: structured,
                         updatesSince: updatesSince
                     )
                     completion(.success(queryOutcome))
@@ -1125,12 +1137,13 @@ final class SourceManager: @unchecked Sendable {
         offset: Int,
         limit: Int,
         quick: [String],
+        structured: PacketStructuredFilterGroup?,
         updatesSince: UInt64?
     ) -> PacketQueryResult {
         let quickKey = quick.sorted().joined(separator: ",")
         let wantQuick = !quick.isEmpty && quickKey != "all"
 
-        // Slice pipeline: display-filtered pool → since → quick → page.
+        // Slice pipeline: display-filtered pool → since → quick → structured → page.
         let basePool: [PacketSummary]
         if source.displayFilter == nil {
             basePool = source.summaries
@@ -1146,6 +1159,11 @@ final class SourceManager: @unchecked Sendable {
         }
         if wantQuick {
             pool = pool.filter { Self.quickMatches($0, quick: quick) }
+        }
+        if let structured, !structured.activeFilters.isEmpty {
+            let context = PacketStructuredFilterService().evaluationContext(for: structured)
+            let service = PacketStructuredFilterService()
+            pool = pool.filter { service.matches($0, context: context) }
         }
 
         let total = pool.count

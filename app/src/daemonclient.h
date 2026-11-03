@@ -41,7 +41,8 @@ signals:
     // callers that must drop replies from superseded fetches.
     void responseObject(const QString &command, const QString &requestID,
                         const QVariantMap &data);
-    void failure(const QString &command, const QString &code, const QString &message);
+    void failure(const QString &command, const QString &code, const QString &message,
+                 const QVariantMap &data = QVariantMap());
     // Request-scoped failure for callers that may have abandoned a request
     // (custom columns) and must not consume another request's error.
     void requestFailure(const QString &requestID, const QString &command,

@@ -227,14 +227,26 @@ page header.
   display filter.
 - **Display filter** — the field on the right accepts Wireshark syntax
   (`tcp.port == 80`, `http.host contains "example.com"`); Enter applies it and
-  the × clears it.
-- **Builder** — opens a row editor for up to five field/condition/value
-  conditions joined with AND or OR. It covers addresses, ports, HTTP host,
-  DNS name, TLS server name, protocol, frame text and packet length, previews
-  the generated expression, and applies it with Enter or **Apply**.
+  the × clears it. A bad expression refuses the apply, marks the field red
+  with the message as a tooltip and selects the offending text (the same
+  byte span Wireshark reports), keeping the last valid filter in effect
+  while you edit.
+- **Builder** — the semantic row editor behind the **Builder** chip: up to
+  five field/condition/value rows joined with AND or OR, evaluated by the
+  daemon per packet. Eighteen fields (URL/domain, addresses, ports, client
+  process, PID, stream, TCP flags/payload, direction, interface, length,
+  decode status, summary, tags…) meet ten conditions — contains/not-contains,
+  prefix/suffix pairs, `<` and `>=` on numeric fields, and
+  regex/not-regex. Each row has an enable checkbox (inactive rows are dimmed
+  and contribute nothing), the preview reads like sentences instead of a
+  compiled expression, and **Save preset…** stores the current rows in the
+  sidebar like a display filter.
 - **Favorites** — pin the current expression with ☆ or save it under a name
-  with ⊕. Pinned and saved filters live in the sidebar's **Filters** group
-  and apply with one click; the row's × removes them.
+  with ⊕; **Save preset…** inside the builder saves its rows the same way.
+  The sidebar's **Filters** group keeps them apart: **Pinned Expressions**
+  and **Saved Wireshark** (one-click display filters) versus **Builder
+  Presets** (clicking one restores its rows into the builder). The row's ×
+  removes them.
 - **Pinned sources & Saved packets** — hover a domain or IP row in the
   source tree for a pin flag, or right-click a packet and choose **Pin** to
   pin its client; pinned rows scope the table with one click. **Save** on a

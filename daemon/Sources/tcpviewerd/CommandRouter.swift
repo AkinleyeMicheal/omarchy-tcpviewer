@@ -120,6 +120,7 @@ final class CommandRouter: @unchecked Sendable {
                     limit: query.limit,
                     filter: query.filter,
                     quickFilters: query.quick,
+                    structured: query.structured,
                     updatesSince: query.updatesSince
                 ) { result in
                     respond(result.map { Self.queryData($0) })
@@ -691,6 +692,7 @@ struct PacketQueryParams {
     let filter: String?
     let quick: [String]
     let updatesSince: UInt64?
+    let structured: PacketStructuredFilterGroup?
 
     init(request: IPCRequest) throws {
         sourceID = request.optionalString("source_id")
@@ -700,6 +702,40 @@ struct PacketQueryParams {
         filter = request.optionalString("filter")
         quick = request.array("quick_filters")?.compactMap { $0.stringValue } ?? []
         updatesSince = try request.optionalDecimalID("updates_since")
+        structured = try Self.parseStructured(request)
+    }
+
+    /// Builder rows ride as `structured` ([{field, condition, text, enabled}])
+    /// plus `structured_join` ("and"|"or"): the builder is a semantic
+    /// row-group upstream too, not a compiled Wireshark expression
+    /// (client/stream/flags rows have no display-filter translation).
+    static func parseStructured(_ request: IPCRequest) throws -> PacketStructuredFilterGroup? {
+        guard let rows = request.array("structured") else {
+            return nil
+        }
+        var filters: [PacketStructuredFilter] = []
+        for row in rows.prefix(PacketStructuredFilterGroup.maxFilterCount) {
+            guard let object = row.objectValue else {
+                throw SourceError(code: IPCError.invalidParams, message: "structured rows must be objects")
+            }
+            guard let fieldRaw = object["field"]?.stringValue,
+                  let field = PacketStructuredFilterQuery(rawValue: fieldRaw) else {
+                throw SourceError(code: IPCError.invalidParams, message: "structured row field unknown: \(object["field"]?.stringValue ?? "")")
+            }
+            guard let conditionRaw = object["condition"]?.stringValue,
+                  let condition = PacketStructuredFilterCondition(rawValue: conditionRaw) else {
+                throw SourceError(code: IPCError.invalidParams, message: "structured row condition unknown: \(object["condition"]?.stringValue ?? "")")
+            }
+            filters.append(PacketStructuredFilter(
+                field: field,
+                condition: condition,
+                text: object["text"]?.stringValue ?? "",
+                isEnabled: object["enabled"]?.boolValue ?? true
+            ))
+        }
+        let joinRaw = request.optionalString("structured_join")
+        let join = PacketStructuredFilterGroupOperator(rawValue: joinRaw ?? "") ?? .and
+        return PacketStructuredFilterGroup(filters: filters, join: join)
     }
 }
 

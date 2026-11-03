@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import Omarchy.TCPViewer
+import "BuilderFormat.js" as BuilderFormat
 
 // Upstream packet-source tree (SidebarViewController / PacketSourceListService):
 // Capture/Files sources, then All -> Apps (app -> domains/IPs) and Domains
@@ -21,6 +22,27 @@ Rectangle {
     signal exportScopeRequested(string nodeID, real globalX, real globalY)
 
     color: Theme.dark ? "#232323" : "#f6f6f6"
+
+    // Saved favorites split by mode (upstream PacketFilterMode): named
+    // Wireshark expressions vs structured builder presets.
+    readonly property var expressionFilters: {
+        var result = []
+        var entries = session.savedFilters
+        for (var i = 0; i < entries.length; ++i) {
+            if (String(entries[i].mode || "expression") !== "builder")
+                result.push(entries[i])
+        }
+        return result
+    }
+    readonly property var builderPresets: {
+        var result = []
+        var entries = session.savedFilters
+        for (var i = 0; i < entries.length; ++i) {
+            if (String(entries[i].mode || "expression") === "builder")
+                result.push(entries[i])
+        }
+        return result
+    }
 
     function basename(path) {
         var value = String(path || "")
@@ -193,14 +215,17 @@ Rectangle {
                     }
                 }
 
+                // Saved favorites are two families (upstream
+                // PacketCustomFilterService): named Wireshark expressions and
+                // structured builder presets, listed separately.
                 SidebarSubHeader {
-                    visible: root.session.savedFilters.length > 0
+                    visible: root.expressionFilters.length > 0
                     width: treeList.width
-                    text: "Saved Filters"
+                    text: "Saved Wireshark"
                 }
 
                 Repeater {
-                    model: root.session.savedFilters
+                    model: root.expressionFilters
                     delegate: FilterRow {
                         required property var modelData
                         width: treeList.width
@@ -208,6 +233,21 @@ Rectangle {
                         query: modelData.query
                         glyph: "▣"
                         filterKind: "saved"
+                    }
+                }
+
+                SidebarSubHeader {
+                    visible: root.builderPresets.length > 0
+                    width: treeList.width
+                    text: "Builder Presets"
+                }
+
+                Repeater {
+                    model: root.builderPresets
+                    delegate: BuilderRow {
+                        required property var modelData
+                        width: treeList.width
+                        entry: modelData
                     }
                 }
 
@@ -475,6 +515,104 @@ Rectangle {
                 anchors.fill: parent
                 anchors.margins: -6
                 onClicked: filterRow.remove()
+            }
+        }
+    }
+
+    // A saved structured preset (upstream PacketCustomFilterService mode
+    // .builder). Clicking feeds the rows back through the controller — the
+    // builder popup re-seeds from session state when reopened — and the hover
+    // × deletes it. The tooltip previews the condition summary.
+    component BuilderRow: Item {
+        id: builderRow
+
+        property var entry
+
+        readonly property string presetTooltip: entry
+            ? BuilderFormat.presetLabel(entry.rows || []) : ""
+        readonly property bool hovered: presetMouse.containsMouse
+
+        height: Theme.sidebarRowHeight
+
+        function apply() {
+            if (root.captureMode !== "packets")
+                root.requestMode("packets")
+            var rows = []
+            if (entry) {
+                var modeled = entry.rows || []
+                for (var i = 0; i < modeled.length; ++i)
+                    rows.push(modeled[i])
+            }
+            root.session.setStructuredFilter(rows, String(entry.join || "and"))
+        }
+
+        function remove() {
+            if (entry)
+                root.session.removeSavedFilter(String(entry.name))
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.leftMargin: 8
+            anchors.rightMargin: 8
+            radius: 6
+            color: builderRow.hovered
+                ? Qt.rgba(Theme.label.r, Theme.label.g, Theme.label.b, 0.06)
+                : "transparent"
+        }
+
+        MouseArea {
+            id: presetMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            acceptedButtons: Qt.LeftButton
+            onClicked: builderRow.apply()
+        }
+
+        Text {
+            id: presetGlyph
+            anchors.left: parent.left
+            anchors.leftMargin: 26
+            anchors.verticalCenter: parent.verticalCenter
+            text: "☗"
+            font.family: Theme.uiFont
+            font.pixelSize: 10
+            color: Theme.systemTeal
+        }
+
+        Text {
+            anchors.left: presetGlyph.right
+            anchors.leftMargin: 7
+            anchors.right: presetRemove.left
+            anchors.rightMargin: 8
+            anchors.verticalCenter: parent.verticalCenter
+            text: builderRow.entry ? String(builderRow.entry.name) : ""
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            font.family: Theme.uiFont
+            font.pixelSize: Theme.uiSize
+            color: Theme.label
+
+            ToolTip.visible: builderRow.hovered
+                && builderRow.presetTooltip.length > 0
+            ToolTip.text: builderRow.presetTooltip
+            ToolTip.delay: 600
+        }
+
+        Text {
+            id: presetRemove
+            anchors.right: parent.right
+            anchors.rightMargin: 18
+            anchors.verticalCenter: parent.verticalCenter
+            text: "×"
+            font.pixelSize: 12
+            color: Theme.secondaryLabel
+            opacity: builderRow.hovered ? 1 : 0
+
+            MouseArea {
+                anchors.fill: parent
+                anchors.margins: -6
+                onClicked: builderRow.remove()
             }
         }
     }
