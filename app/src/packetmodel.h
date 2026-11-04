@@ -115,6 +115,10 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     Q_INVOKABLE void clear();
+    // Upstream WorkspaceFoundation.deletePackets: rows leave the workspace
+    // via the table menu / Delete key. Removes by packet id in one reset
+    // (both the backing rows and the tree-filter window re-derive).
+    Q_INVOKABLE int removeByIds(const QStringList &ids);
     // TableView needs the visible-column count; a QAbstractListModel would only
     // instantiate one column per row.
     Q_INVOKABLE void setColumnCount(int count);

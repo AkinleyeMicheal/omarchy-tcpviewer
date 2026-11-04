@@ -6,6 +6,7 @@
 #include <QGuiApplication>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
 #include <QSettings>
 #include <QTimer>
 #include <QUrl>
@@ -85,6 +86,7 @@ SessionController::SessionController(QObject *parent)
     m_startupCaptureIface = qEnvironmentVariable("TCPVIEWER_CAPTURE_IFACE");
     m_treeSelectNode = qEnvironmentVariable("TCPVIEWER_TREE_SELECT");
     m_startupFilter = qEnvironmentVariable("TCPVIEWER_FILTER").trimmed();
+    m_deleteRowsHook = qEnvironmentVariable("TCPVIEWER_DELETE_ROWS");
     // CI/test hook: preselect quick-filter chips (e.g. "tcp", "errors")
     // so filtered-table flows can be captured without a mouse click.
     const QStringList quickHook =
@@ -588,6 +590,135 @@ void SessionController::resetPacketTextStyle(const QString &packetID)
     dispatchPacketAnnotation(packetID, change,
                              QStringLiteral("packets.set_style"),
                              {{"op", QStringLiteral("reset")}});
+}
+
+// Upstream deletePackets for the packet workspace (context menu / Delete
+// key): rows leave the ingest state with "Deleted N packet(s)." status.
+// Like the annotation mutators, the local model mirrors first; the daemon
+// owns the buffers via packets.delete. A daemon-side failure (source gone,
+// unknown ids) re-syncs the table through resetStream.
+void SessionController::deletePacketRows(const QVariantList &rows)
+{
+    if (m_savedMode || m_currentSourceID.isEmpty() || m_loading)
+        return;
+
+    // Row indexes become invalid after the removal, so resolve ids — and
+    // selection-hop candidates (upstream nextVisiblePacketIDAfterDeleting:
+    // the first surviving row after the block, else the one before it) —
+    // while the rows are still in place.
+    QVariantList doomed;
+    QSet<QString> doomedIDs;
+    QSet<int> doomedRows;
+    int lowestRow = -1;
+    int highestRow = -1;
+    for (const QVariant &value : rows) {
+        bool ok = false;
+        const int row = value.toInt(&ok);
+        if (!ok || row < 0)
+            continue;
+        const QString packetID = m_packets->packetIDAt(row);
+        if (packetID.isEmpty() || doomedIDs.contains(packetID))
+            continue;
+        doomedIDs.insert(packetID);
+        doomedRows.insert(row);
+        doomed.append(packetID);
+        lowestRow = lowestRow < 0 ? row : qMin(lowestRow, row);
+        highestRow = highestRow < 0 ? row : qMax(highestRow, row);
+    }
+    if (doomed.isEmpty() || doomed.size() > 5'000)
+        return;
+
+    const bool selectionHit = doomedIDs.contains(m_selectedPacketID);
+    QString hopID;
+    if (selectionHit) {
+        for (int row = highestRow + 1; row < m_packets->count(); ++row) {
+            if (!doomedRows.contains(row)) {
+                hopID = m_packets->packetIDAt(row);
+                break;
+            }
+        }
+        if (hopID.isEmpty()) {
+            for (int row = lowestRow - 1; row >= 0; --row) {
+                if (!doomedRows.contains(row)) {
+                    hopID = m_packets->packetIDAt(row);
+                    break;
+                }
+            }
+        }
+    }
+
+    // Sidebar aggregates shrink with the same rows (upstream's snapshot
+    // rebuild drops the deleted packets from the source tree too).
+    QVector<PacketRow> treeRows;
+    treeRows.reserve(doomedRows.size());
+    for (const QVariant &value : rows) {
+        bool ok = false;
+        const int row = value.toInt(&ok);
+        if (!ok || row < 0)
+            continue;
+        treeRows.append(packetRowFromMap(m_packets->rowSnapshotAt(row)));
+    }
+
+    const int removed = m_packets->removeByIds(QStringList(doomedIDs.values()));
+    if (removed == 0)
+        return;
+    if (!treeRows.isEmpty())
+        m_sourceTree->removeRows(treeRows);
+    if (selectionHit)
+        selectPacket(hopID);  // empty id clears the selection
+
+    m_pendingDeleteCount = removed;
+    m_client->send(QStringLiteral("packets.delete"),
+                   {{QStringLiteral("source_id"), m_currentSourceID},
+                    {QStringLiteral("packet_ids"), doomed}});
+}
+
+void SessionController::triggerDeleteRowsHook()
+{
+    if (m_deleteHookFired || m_deleteRowsHook.isEmpty())
+        return;
+    QVariantList rows;
+    int highest = -1;
+    const QStringList parts = m_deleteRowsHook.split(u',', Qt::SkipEmptyParts);
+    for (const QString &part : parts) {
+        bool ok = false;
+        const int row = part.trimmed().toInt(&ok);
+        if (!ok || row < 0)
+            return;
+        if (row > highest)
+            highest = row;
+        rows.append(row);
+    }
+    // Rows not onscreen yet; the next page arrival retries.
+    if (highest < 0 || highest >= m_packets->count())
+        return;
+    m_deleteHookFired = true;
+    // Deferred one event turn so the seeded selection mirrors the mouse flow
+    // before the delete (the keyboard path acts on a live selection too).
+    QTimer::singleShot(0, this, [this, rows]() { deletePacketRows(rows); });
+}
+
+// Bulk targets (upstream keyboard + menu mutations apply to the whole
+// selection): id order follows the given rows, duplicates skipped.
+void SessionController::setPacketHighlightColors(const QVariantList &packetIDs,
+                                                 const QString &colorName)
+{
+    if (colorName.isEmpty())
+        return;
+    for (const QVariant &packetID : packetIDs)
+        setPacketHighlightColor(packetID.toString(), colorName);
+}
+
+void SessionController::togglePacketStrikethroughs(const QVariantList &packetIDs)
+{
+    for (const QVariant &packetID : packetIDs)
+        togglePacketStrikethrough(packetID.toString());
+}
+
+void SessionController::resetPacketTextStyles(const QVariantList &packetIDs)
+{
+    for (const QVariant &packetID : packetIDs)
+        resetPacketTextStyle(packetID.toString());
 }
 
 void SessionController::setPacketComment(const QString &packetID, const QString &comment)
@@ -1325,6 +1456,17 @@ void SessionController::handleResponseRequestFailure(const QString &requestID,
 
 void SessionController::handleResponse(const QString &command, const QVariantMap &data)
 {
+    // Packets-view delete: the local rows are already gone; the reply only
+    // reconciles the totals (a failure re-syncs the whole table, see
+    // handleFailure).
+    if (command == QStringLiteral("packets.delete")) {
+        const int removed = m_pendingDeleteCount;
+        m_pendingDeleteCount = 0;
+        if (data.value(QStringLiteral("deleted_count")).toInt() > 0 && removed > 0)
+            setTotalCount(m_totalCount - removed);
+        return;
+    }
+
     // The filter error state clears when a new expression is applied (see
     // applyFilter), not on page replies: reverting after an invalid filter
     // also produces a successful packets.list and must not undo it.
@@ -1527,6 +1669,11 @@ void SessionController::handlePackets(const QVariantMap &data)
 
     applyTreeSelectHook();
 
+    // CI/screenshot hook: TCPVIEWER_DELETE_ROWS=row,row fires the table
+    // delete flow (upstream ⌫/Del and the row menu's Delete) once the rows
+    // exist onscreen.
+    triggerDeleteRowsHook();
+
     // CI/screenshot hook: always inspect this packet number once rows exist.
     const QString autoSelect = qEnvironmentVariable("TCPVIEWER_SELECT_PACKET");
     if (!autoSelect.isEmpty() && m_selectedPacketID.isEmpty() && !rows.isEmpty())
@@ -1583,6 +1730,14 @@ void SessionController::handleFailure(const QString &command, const QString &cod
     // "Stopping…"; the status poll still reflects the true phase.
     if (command == QStringLiteral("capture.stop")) {
         setStopInFlight(false);
+    }
+
+    // A failed delete (source gone, connection lost) dusts the optimistic
+    // removal: rebuild the table straight from the daemon's buffers.
+    if (command == QStringLiteral("packets.delete")) {
+        m_pendingDeleteCount = 0;
+        resetStream();
+        return;
     }
 
     // Display-filter validation failures carry the diagnostic byte span

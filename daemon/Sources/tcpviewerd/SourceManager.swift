@@ -1327,6 +1327,69 @@ final class SourceManager: @unchecked Sendable {
         }
     }
 
+    /// Mirror of upstream WorkspaceFoundation.deletePackets: removes the
+    /// packets from the ingest state (live and offline alike) and reports
+    /// "Deleted N packet(s)." as the status message. The Saved workspace
+    /// never reaches this — deleting there means deleting record copies on
+    /// the client (upstream savedPacketService.deletePacketIDs).
+    ///
+    /// The display-filter index and combined quick cache hold positional
+    /// scans over `summaries`, so a removal invalidates them; the next page
+    /// query rebuilds from scratch through ensureFilterIndex. Deleted ids
+    /// are NOT ringed as updates (there is nothing left to pull — pages and
+    /// totals simply shrink for the next reader).
+    func deletePackets(
+        sourceID: String?,
+        packetIDs: [UInt64],
+        completion: @escaping (Result<[String: IPCValue], Error>) -> Void
+    ) {
+        queue.async {
+            guard let source = self.resolveSource(id: sourceID, completion: completion) else { return }
+            guard !packetIDs.isEmpty else {
+                return completion(.success(Self.deleteReplies(source: source, removed: [])))
+            }
+            let doomed = Set(packetIDs)
+            // Presence is read before pruning: after removal a deleted id is
+            // indistinguishable from an unknown one, which upstream treats
+            // as a no-op.
+            let present = Set(doomed.filter { id in
+                self.indexOfSummary(id: id, in: source) != nil
+            })
+            guard !present.isEmpty else {
+                return completion(.success(Self.deleteReplies(source: source, removed: [])))
+            }
+            let before = source.summaries.count
+            // Summaries stay id-ascending; filter preserves the ordering.
+            source.summaries.removeAll { doomed.contains($0.id) }
+            let removedCount = before - source.summaries.count
+            // Ingest state changed: caches derived from summary positions
+            // become invalid, so the next page rebuilds through the filter
+            // evaluation path.
+            source.filterIDs = []
+            source.filterEvaluatedCount = 0
+            source.combinedKey = nil
+            source.combinedIDs = []
+            source.statusMessage = "Deleted \(removedCount) packet(s)."
+            // Status event with the message (the throttle clock is reset so
+            // the app strip reads "Deleted N packet(s)." at once).
+            source.lastStateEmit = .distantPast
+            self.emitThrottledState(for: source)
+            completion(.success(Self.deleteReplies(
+                source: source,
+                removed: Array(present)
+            )))
+        }
+    }
+
+    private static func deleteReplies(source: Source, removed: [UInt64]) -> [String: IPCValue] {
+        let ids = removed.sorted()
+        return [
+            "source_id": .string(source.id),
+            "deleted_count": .int(ids.count),
+            "deleted_ids": .array(ids.map { .string(String($0)) }),
+        ]
+    }
+
     private static func annotationMutation(op: String, color: String?) -> PacketTextStyleMutation? {
         switch op {
         case "set_highlight":

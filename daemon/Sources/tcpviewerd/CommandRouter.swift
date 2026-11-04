@@ -242,6 +242,19 @@ final class CommandRouter: @unchecked Sendable {
                 respond(.failure(error))
             }
 
+        case .packetsDelete:
+            do {
+                let ids = try request.requireBoundedPacketIDs("packet_ids", max: 5_000)
+                manager.deletePackets(
+                    sourceID: request.optionalString("source_id"),
+                    packetIDs: ids
+                ) { result in
+                    respond(result)
+                }
+            } catch {
+                respond(.failure(error))
+            }
+
         case .streamPackets:
             do {
                 let streamID = try request.requireString("stream_id")

@@ -34,7 +34,7 @@ let twoWordCommands: Set<String> = [
     "capture.start", "capture.pause", "capture.resume", "capture.stop", "capture.status", "capture.overview",
     "interfaces.list", "sources.list", "source.close",
     "packets.list", "packets.summary", "packets.details", "packets.bytes", "packets.clear",
-    "packets.set_style", "packets.set_comment",
+    "packets.set_style", "packets.set_comment", "packets.delete",
     "stream.packets", "stream.follow",
     "file.import", "file.export", "file.export_session",
     "file.session_state",
@@ -79,6 +79,7 @@ func usage() -> Never {
                                             [--source-id ID]
       packets set-style --ids ID,... --op toggle_strikethrough | reset
       packets set-comment --ids ID,... --comment TEXT [--source-id ID]
+      packets delete --ids ID,... [--source-id ID]
       stream packets STREAM_ID [QUERY OPTIONS]
       stream follow PACKET_ID [--direction both|client-to-server|server-to-client]
                              [--encoding text|hex|base64]
@@ -235,7 +236,8 @@ func buildRequest(args: CLIArguments) -> IPCRequest {
 
     // Annotation selection: --ids 12,34,56 → packet_ids array (a comma list;
     // a bare single id also wraps into the array).
-    if command == .packetsSetStyle || command == .packetsSetComment,
+    if command == .packetsSetStyle || command == .packetsSetComment
+        || command == .packetsDelete,
        let ids = args.flags["ids"] {
         let value = wireValue(ids)
         params["packet_ids"] = .array(value.arrayValue ?? [value])

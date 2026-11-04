@@ -58,6 +58,9 @@ public:
 
     void reset();
     void appendRows(const QVector<PacketRow> &rows);
+    // Upstream WorkspaceFoundation.deletePackets: the sidebar aggregates
+    // shrink with the deleted rows (counts drop, empty buckets leave).
+    void removeRows(const QVector<PacketRow> &rows);
     void rebuildNow();
 
     Q_INVOKABLE void selectNode(const QString &nodeId);
@@ -106,6 +109,9 @@ private:
     void addDomain(const QString &domain);
     void addIP(QHash<QString, int> &counts, QStringList &order,
                const QString &address, int maximum);
+    void removeApp(const PacketRow &row, const QString &domain);
+    static void decrementCount(QHash<QString, int> &counts, QStringList &order,
+                               const QString &key);
     static bool incrementCount(QHash<QString, int> &counts, QStringList &order,
                                const QString &key, int maximum);
     static QString normalizedDomain(const QString &value);

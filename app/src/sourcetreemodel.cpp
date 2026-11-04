@@ -155,6 +155,39 @@ void SourceTreeModel::addDomain(const QString &domain)
     incrementCount(m_domainCounts, m_domainOrder, domain, maximumDomains);
 }
 
+void SourceTreeModel::removeRows(const QVector<PacketRow> &rows)
+{
+    if (rows.isEmpty())
+        return;
+
+    for (const PacketRow &row : rows) {
+        const QString domain = normalizedDomain(row.domain);
+        if (m_totalPackets > 0)
+            --m_totalPackets;
+        decrementCount(m_domainCounts, m_domainOrder, domain);
+
+        if (domain.isEmpty() && m_packetsWithoutDomain > 0)
+            --m_packetsWithoutDomain;
+
+        if (!row.clientKey.trimmed().isEmpty()) {
+            if (m_packetsWithClient > 0)
+                --m_packetsWithClient;
+            removeApp(row, domain);
+        }
+
+        if (domain.isEmpty()) {
+            const QString source = normalizedIP(row.source);
+            const QString destination = normalizedIP(row.destination);
+            decrementCount(m_ipCounts, m_ipOrder, source);
+            if (destination != source)
+                decrementCount(m_ipCounts, m_ipOrder, destination);
+        }
+    }
+
+    if (!m_rebuildTimer.isActive())
+        m_rebuildTimer.start();
+}
+
 void SourceTreeModel::addApp(const PacketRow &row, const QString &domain)
 {
     const QString key = row.clientKey.trimmed();
@@ -188,6 +221,47 @@ void SourceTreeModel::addIP(QHash<QString, int> &counts, QStringList &order,
     if (address.isEmpty())
         return;
     incrementCount(counts, order, address, maximum);
+}
+
+// Removal mirrors addApp/addDomain/addIP: counts drop, empty buckets leave
+// (the same re-derivation the rebuild gets from these aggregates).
+void SourceTreeModel::removeApp(const PacketRow &row, const QString &domain)
+{
+    const QString key = row.clientKey.trimmed();
+    auto it = m_apps.find(key);
+    if (it == m_apps.end())
+        return;
+    AppBucket &app = it.value();
+    if (app.count > 0)
+        --app.count;
+    decrementCount(app.domainCounts, app.domainOrder, domain);
+
+    if (domain.isEmpty()) {
+        const QString source = normalizedIP(row.source);
+        const QString destination = normalizedIP(row.destination);
+        decrementCount(app.ipCounts, app.ipOrder, source);
+        if (destination != source)
+            decrementCount(app.ipCounts, app.ipOrder, destination);
+    }
+
+    if (app.count <= 0) {
+        m_apps.erase(it);
+        m_appOrder.removeAll(key);
+    }
+}
+
+void SourceTreeModel::decrementCount(QHash<QString, int> &counts, QStringList &order,
+                                     const QString &key)
+{
+    auto it = counts.find(key);
+    if (it == counts.end())
+        return;
+    if (it.value() > 1) {
+        --it.value();
+        return;
+    }
+    counts.erase(it);
+    order.removeAll(key);
 }
 
 bool SourceTreeModel::incrementCount(QHash<QString, int> &counts, QStringList &order,

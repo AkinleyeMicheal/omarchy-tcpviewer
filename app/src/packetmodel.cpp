@@ -1,5 +1,6 @@
 #include "packetmodel.h"
 
+#include <QSet>
 #include <QVariantMap>
 
 #include <algorithm>
@@ -208,6 +209,33 @@ QHash<int, QByteArray> PacketListModel::roleNames() const
         {HighlightColorRole, "highlightColor"},
         {StrikethroughRole, "strikethrough"},
     };
+}
+
+int PacketListModel::removeByIds(const QStringList &ids)
+{
+    const QSet<QString> doomed(ids.cbegin(), ids.cend());
+    if (doomed.isEmpty())
+        return 0;
+    QVector<PacketRow> remaining;
+    remaining.reserve(m_rows.size());
+    int removed = 0;
+    for (const PacketRow &row : m_rows) {
+        if (doomed.contains(row.packetId))
+            ++removed;
+        else
+            remaining.append(row);
+    }
+    if (removed == 0)
+        return 0;
+    beginResetModel();
+    m_rows = remaining;
+    rebuildVisibleRows();
+    endResetModel();
+    // Row-set mutation: derived consumers (pin counts, seeded hooks) re-run.
+    ++m_revision;
+    emit revisionChanged();
+    emit countChanged();
+    return removed;
 }
 
 void PacketListModel::clear()

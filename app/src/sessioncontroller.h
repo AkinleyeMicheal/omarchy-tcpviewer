@@ -186,6 +186,20 @@ public:
     // the stage. join is "and"|"or" (default and).
     Q_INVOKABLE void setStructuredFilter(const QVariantList &rows, const QString &join);
 
+    // Bulk annotation targets (upstream menus and keyboard shortcuts apply
+    // to the targeted rows): ids are packet ids, dedup happens in C++.
+    Q_INVOKABLE void setPacketHighlightColors(const QVariantList &packetIDs, const QString &colorName);
+    Q_INVOKABLE void togglePacketStrikethroughs(const QVariantList &packetIDs);
+    Q_INVOKABLE void resetPacketTextStyles(const QVariantList &packetIDs);
+
+    // Packet workspace delete (upstream WorkspaceFoundation.deletePackets):
+    // rows are table row indexes; optimistic removal + packets.delete IPC.
+    Q_INVOKABLE void deletePacketRows(const QVariantList &rows);
+
+    // CI/screenshot hook (TCPVIEWER_DELETE_ROWS=row,row): fires the packet
+    // delete flow once those rows exist onscreen, mirroring the menu/⌫ path.
+    void triggerDeleteRowsHook();
+
     // Named structured-builder presets (upstream PacketCustomFilterService
     // mode .builder): validated like saveFilter; name-keyed replace.
     Q_INVOKABLE QString saveStructuredFilter(const QString &name,
@@ -392,6 +406,10 @@ private:
     bool m_stopInFlight = false;
     int m_totalCount = 0;
     quint64 m_lastPacketID = 0;
+    // Packets-view delete bookkeeping: rows removed optimistically while the
+    // packets.delete reply is in flight (success reconciles totals; failure
+    // re-syncs the table).
+    int m_pendingDeleteCount = 0;
     qint64 m_lastPacketTimestamp = 0;
     QHash<QString, qint64> m_lastStreamTimestamp;
     // Stream rebuild epoch: resetStream/selectSourceInternal bumps it; packet
@@ -403,6 +421,10 @@ private:
     // Paths of the import chain in flight (multi-file progress display).
     QStringList m_importPaths;
     QString m_selectedPacketID;
+    // CI hook: TCPVIEWER_DELETE_ROWS fires the packet delete flow on those
+    // table rows (upstream ⌫/Del and the row menu's Delete).
+    QString m_deleteRowsHook;
+    bool m_deleteHookFired = false;
     // CI hook: TCPVIEWER_CAPTURE_IFACE starts live capture after startup.
     QString m_startupCaptureIface;
     bool m_startupCaptureStarted = false;

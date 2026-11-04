@@ -53,6 +53,12 @@ public enum IPCCommand: String, Codable, CaseIterable {
     /// no-op — upstream v1 offers no comment removal.
     case packetsSetComment = "packets.set_comment"
 
+    /// New in our schema: delete the indexed packets from the workspace
+    /// (upstream WorkspaceFoundation.deletePackets, driven from the table's
+    /// context menu / Delete key; the Saved workspace instead deletes its
+    /// record copies client-side, never the capture).
+    case packetsDelete = "packets.delete"
+
     case streamPackets = "stream.packets"
     case streamFollow = "stream.follow"
 

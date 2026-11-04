@@ -55,6 +55,25 @@ ApplicationWindow {
         onTriggered: window.copySelection()
     }
 
+    // Upstream table shortcuts on Linux keys (the app's modifier is Ctrl,
+    // matching the established Ctrl+F/… set): Comment ⌘L → Ctrl+L, the
+    // nine palette colors ⌘1..9 → Ctrl+1..9, strikethrough ⌘/ → Ctrl+/,
+    // reset ⌘0 → Ctrl+0, and Delete ⌫/Del.
+    Action { id: addCommentAction; shortcut: "Ctrl+L"; enabled: window.tableKeysEnabled(); onTriggered: window.keyboardAddComment() }
+    Action { id: resetTextStyleAction; shortcut: "Ctrl+0"; enabled: window.tableKeysEnabled(); onTriggered: session.resetPacketTextStyles(window.keyboardTargetIDs()) }
+    Action { id: strikeTextStyleAction; shortcut: "Ctrl+/"; enabled: window.tableKeysEnabled(); onTriggered: session.togglePacketStrikethroughs(window.keyboardTargetIDs()) }
+    Action { id: highlight1Action; shortcut: "Ctrl+1"; enabled: window.tableKeysEnabled(); onTriggered: session.setPacketHighlightColors(window.keyboardTargetIDs(), Theme.highlightOrder[0]) }
+    Action { id: highlight2Action; shortcut: "Ctrl+2"; enabled: window.tableKeysEnabled(); onTriggered: session.setPacketHighlightColors(window.keyboardTargetIDs(), Theme.highlightOrder[1]) }
+    Action { id: highlight3Action; shortcut: "Ctrl+3"; enabled: window.tableKeysEnabled(); onTriggered: session.setPacketHighlightColors(window.keyboardTargetIDs(), Theme.highlightOrder[2]) }
+    Action { id: highlight4Action; shortcut: "Ctrl+4"; enabled: window.tableKeysEnabled(); onTriggered: session.setPacketHighlightColors(window.keyboardTargetIDs(), Theme.highlightOrder[3]) }
+    Action { id: highlight5Action; shortcut: "Ctrl+5"; enabled: window.tableKeysEnabled(); onTriggered: session.setPacketHighlightColors(window.keyboardTargetIDs(), Theme.highlightOrder[4]) }
+    Action { id: highlight6Action; shortcut: "Ctrl+6"; enabled: window.tableKeysEnabled(); onTriggered: session.setPacketHighlightColors(window.keyboardTargetIDs(), Theme.highlightOrder[5]) }
+    Action { id: highlight7Action; shortcut: "Ctrl+7"; enabled: window.tableKeysEnabled(); onTriggered: session.setPacketHighlightColors(window.keyboardTargetIDs(), Theme.highlightOrder[6]) }
+    Action { id: highlight8Action; shortcut: "Ctrl+8"; enabled: window.tableKeysEnabled(); onTriggered: session.setPacketHighlightColors(window.keyboardTargetIDs(), Theme.highlightOrder[7]) }
+    Action { id: highlight9Action; shortcut: "Ctrl+9"; enabled: window.tableKeysEnabled(); onTriggered: session.setPacketHighlightColors(window.keyboardTargetIDs(), Theme.highlightOrder[8]) }
+    Action { id: deleteRowsAction; shortcut: "Del"; enabled: window.tableKeysEnabled(); onTriggered: window.keyboardDeleteRows() }
+    Action { id: backspaceRowsAction; shortcut: "Backspace"; enabled: window.tableKeysEnabled(); onTriggered: window.keyboardDeleteRows() }
+
     menuBar: MenuBar {
         id: menuBar
 
@@ -1057,6 +1076,67 @@ ApplicationWindow {
         session.copyPlainText(copyFormatter.rows([session.packets.rowSnapshotAt(row)], "csv"))
     }
 
+    // Keyboard annotation targets (upstream keyDown on the table): the
+    // current multi-selection, else the anchor/selected row. Row indexes
+    // mirror PacketTableView.targetRowsFor for the keyboard-driven flow.
+    function packetTargetRows() {
+        const rows = paneTable.selectedRows
+        if (rows.length > 0)
+            return rows
+        if (session.selectedPacketID === "")
+            return []
+        const row = session.packets.rowForPacketID(session.selectedPacketID)
+        return row >= 0 ? [row] : []
+    }
+
+    function keyboardTargetIDs() {
+        const rows = packetTargetRows()
+        const ids = []
+        for (let i = 0; i < rows.length; ++i) {
+            if (rows[i] < 0 || rows[i] >= session.packets.count)
+                continue
+            const id = String(session.packets.packetIDAt(rows[i]))
+            if (id !== "" && ids.indexOf(id) < 0)
+                ids.push(id)
+        }
+        return ids
+    }
+
+    // Upstream ⌘L: the comment sheet opens on the targeted row (single; the
+    // sheet edits one comment like the menu item).
+    function keyboardAddComment() {
+        const rows = packetTargetRows()
+        if (rows.length === 0)
+            return
+        const row = rows[0]
+        if (row < 0 || row >= session.packets.count)
+            return
+        packetCommentSheet.openFor(String(session.packets.packetIDAt(row)),
+                                   String(session.packets.commentAt(row)))
+    }
+
+    // Upstream ⌫/Del on the table: rows leave the workspace (Saved view
+    // removes its record copies; packets view asks the daemon).
+    function keyboardDeleteRows() {
+        const ids = keyboardTargetIDs()
+        const rows = packetTargetRows()
+        if (session.savedMode) {
+            for (let i = 0; i < ids.length; ++i)
+                session.removeSavedPacket(ids[i])
+            return
+        }
+        session.deletePacketRows(rows)
+    }
+
+    // Controls whether the table-scoped keys (comment/colors/strike/delete)
+    // have anything to act on and are not swallowing text input.
+    function tableKeysEnabled() {
+        const item = activeFocusItem
+        if (item && (item instanceof TextInput || item instanceof TextArea))
+            return false
+        return keyboardTargetIDs().length > 0
+    }
+
     function openCaptureDialog() {
         openDialog.open()
     }
@@ -1109,6 +1189,19 @@ ApplicationWindow {
         readonly property bool annotationEnabled: pendingPacketID !== ""
             && (session.savedMode
                 || (session.currentSourceID !== "" && !session.loading))
+        // Upstream menus and shortcuts mutate the whole targeted row set.
+        readonly property var pendingRowIDs: {
+            const targets = pendingRows
+            const ids = []
+            for (let i = 0; i < targets.length; ++i) {
+                if (targets[i] < 0 || targets[i] >= session.packets.count)
+                    continue
+                const id = String(session.packets.packetIDAt(targets[i]))
+                if (id !== "" && ids.indexOf(id) < 0)
+                    ids.push(id)
+            }
+            return ids
+        }
 
         function openFor(index, globalX, globalY, columnID, targetRows) {
             pendingRow = index
@@ -1241,8 +1334,8 @@ ApplicationWindow {
                 delegate: MenuItem {
                     required property var modelData
                     text: highlightMenu.capitalize(modelData)
-                    onTriggered: session.setPacketHighlightColor(
-                        rowContextMenu.pendingPacketID, modelData)
+                    onTriggered: session.setPacketHighlightColors(
+                        rowContextMenu.pendingRowIDs, modelData)
                 }
             }
 
@@ -1253,8 +1346,8 @@ ApplicationWindow {
                 checkable: true
                 checked: rowContextMenu.pendingRow >= 0
                     && session.packets.strikethroughAt(rowContextMenu.pendingRow)
-                onTriggered: session.togglePacketStrikethrough(
-                    rowContextMenu.pendingPacketID)
+                onTriggered: session.togglePacketStrikethroughs(
+                    rowContextMenu.pendingRowIDs)
             }
 
             MenuItem {
@@ -1262,7 +1355,8 @@ ApplicationWindow {
                 enabled: rowContextMenu.pendingRow >= 0
                     && (session.packets.strikethroughAt(rowContextMenu.pendingRow)
                         || session.packets.highlightColorAt(rowContextMenu.pendingRow) !== "")
-                onTriggered: session.resetPacketTextStyle(rowContextMenu.pendingPacketID)
+                onTriggered: session.resetPacketTextStyles(
+                    rowContextMenu.pendingRowIDs)
             }
         }
 
@@ -1282,6 +1376,20 @@ ApplicationWindow {
                 text: "as pcapng…"
                 onTriggered: window.exportMenuRows("pcapng")
             }
+        }
+
+        // Upstream Delete sits last with the ⌫ key equivalent; it targets
+        // the packet workspace (the Saved variant removes records above).
+        MenuSeparator {
+            visible: !session.savedMode
+                && rowContextMenu.pendingRows.length > 0
+        }
+
+        MenuItem {
+            text: "Delete"
+            enabled: !session.savedMode && session.currentSourceID !== ""
+                && !session.loading && rowContextMenu.pendingRows.length > 0
+            onTriggered: session.deletePacketRows(rowContextMenu.pendingRows)
         }
     }
 

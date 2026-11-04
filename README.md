@@ -193,6 +193,16 @@ page header.
   Ctrl/Shift+click builds a multi-selection that the menu (copy and
   **Export ▸ as pcap/pcapng**) targets as a whole; sidebar app, domain, and
   IP rows — and their Pinned equivalents — export their scope the same way.
+- Row annotations have the upstream keyboard shortcuts (Linux uses `Ctrl`
+  where upstream uses `Command`): `Ctrl+L` opens the comment sheet on the
+  targeted rows, `Ctrl+1`–`Ctrl+9` apply the first nine highlight colors,
+  `Ctrl+/` toggles strikethrough, and `Ctrl+0` resets the row style. The
+  menu's **Delete** (or the `Del`/`Backspace` key) removes the targeted
+  packet rows from the workspace — live and offline captures alike — with
+  the selection hopping to the next visible row; in the Saved workspace the
+  same key deletes the saved record without touching the capture.
+
+![Table delete with updated counts](docs/delete-rows.png)
 - Right-clicking a protocol-detail row in the inspector offers
   **Create Column**, adding a bounded table column backed by that field.
 
