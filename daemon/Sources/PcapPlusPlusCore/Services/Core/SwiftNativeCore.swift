@@ -1393,6 +1393,8 @@ private func nativeLinkType(_ linkLayerType: Int32) -> PCPPNativeLinkType {
         return .loopback
     case Libpcap.dltRaw:
         return .raw
+    case Libpcap.dltLinuxSLL, Libpcap.dltLinuxSLL2:
+        return .linuxSLL
     default:
         return .unknown
     }

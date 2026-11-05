@@ -76,6 +76,8 @@ enum NativeBridgeMapper {
             .loopback
         case 2:
             .raw
+        case 4:
+            .linuxSLL
         case 3:
             .unknown
         default:
@@ -278,6 +280,8 @@ enum NativeBridgeMapper {
             return "Loopback"
         case .raw:
             return "Raw IP"
+        case .linuxSLL:
+            return "Linux cooked"
         case .unknown:
             return "Interface"
         }

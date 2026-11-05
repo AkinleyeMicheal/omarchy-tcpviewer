@@ -26,6 +26,7 @@ enum PCPPNativeLinkType: Int {
     case loopback = 1
     case raw = 2
     case unknown = 3
+    case linuxSLL = 4
 }
 
 enum PCPPNativeTransportHint: Int {

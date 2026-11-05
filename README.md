@@ -210,7 +210,10 @@ page header.
 
 - **Interfaces** — the picker lists every capturable device, first among them
   the synthesized **All Interfaces (any)** row, libpcap's every-interface
-  device (SLL frames, loopback included). The picker locks while a capture
+  device (SLL frames, loopback included). Linux cooked captures are decoded
+  in full — SLL and SLL2 frames get real endpoints, ports, TCP analysis and
+  process attribution, so the table columns and Overview cards carry the
+  same data as per-interface captures. The picker locks while a capture
   is running; stop before switching.
 - **Start / Stop / Pause / Resume** — Start and Stop are the always-visible
   controls; **Pause / Resume** appears (in the phase color) only while a

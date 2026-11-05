@@ -194,6 +194,8 @@ enum SwiftPacketDissector {
             return .loopback
         case Libpcap.dltRaw:
             return .raw
+        case Libpcap.dltLinuxSLL, Libpcap.dltLinuxSLL2:
+            return .linuxSLL
         default:
             return .unknown
         }
@@ -282,6 +284,10 @@ final class PacketAnalyzer {
             return analyzeLoopback()
         case Libpcap.dltRaw:
             return analyzeIP(offset: 0, inheritedNodes: [], inheritedLayers: [])
+        case Libpcap.dltLinuxSLL:
+            return analyzeLinuxSLL()
+        case Libpcap.dltLinuxSLL2:
+            return analyzeLinuxSLL2()
         default:
             return unsupportedPacket(reason: "Unsupported link-layer type \(record.linkLayerType).")
         }
@@ -312,6 +318,149 @@ final class PacketAnalyzer {
             analyzed.protocolSummary = "Loopback"
         }
         return analyzed
+    }
+
+    // Cooked capture header for the "any" device (DLT_LINUX_SLL, pcap/sll.h):
+    // packet type, hardware type, address length, an 8-byte link address and
+    // the EtherType, followed by the network payload.
+    private func analyzeLinuxSLL() -> AnalyzedPacket {
+        guard bytes.count >= 16 else {
+            return malformedPacket(reason: "Linux cooked packet is shorter than the SLL header.")
+        }
+
+        let packetType = readUInt16BE(at: 0) ?? 0
+        let hardwareType = readUInt16BE(at: 2) ?? 0
+        let addressLength = Int(readUInt16BE(at: 4) ?? 0)
+        let ethType = readUInt16BE(at: 14) ?? 0
+        let sllNode = PacketDetailNode(
+            id: "sll",
+            name: "Linux cooked",
+            fieldName: "sll",
+            value: "Linux cooked",
+            kind: .layer,
+            byteRange: range(offset: 0, length: min(16, bytes.count)),
+            children: [
+                field(id: "sll.pkttype", name: "Packet Type", fieldName: "sll.pkttype", value: sllPacketTypeText(packetType), offset: 0, length: 2),
+                field(id: "sll.hatype", name: "Source Hardware Type", fieldName: "sll.hatype", value: sllHardwareTypeText(hardwareType), offset: 2, length: 2),
+                field(id: "sll.halen", name: "Source address length", fieldName: "sll.halen", value: "\(addressLength)", offset: 4, length: 2),
+                field(id: "sll.src", name: "Source", fieldName: "sll.src", value: sllAddressText(offset: 6, length: addressLength), offset: 6, length: 8),
+                field(id: "sll.type", name: "Protocol", fieldName: "sll.type", value: hex16(ethType), offset: 14, length: 2),
+            ]
+        )
+        return analyzeCookedPayload(
+            ethType: ethType,
+            headerLength: 16,
+            inheritedNodes: [sllNode],
+            inheritedLayers: [PacketLayer(name: "Linux cooked", detailSummary: "Linux cooked capture")]
+        )
+    }
+
+    // Cooked capture header v2 (DLT_LINUX_SLL2, pcap/sll.h): a 20-byte header
+    // carrying the EtherType, interface index and hardware identity.
+    private func analyzeLinuxSLL2() -> AnalyzedPacket {
+        guard bytes.count >= 20 else {
+            return malformedPacket(reason: "Linux cooked packet is shorter than the SLL2 header.")
+        }
+
+        let ethType = readUInt16BE(at: 0) ?? 0
+        let interfaceIndex = readUInt32BE(at: 4) ?? 0
+        let hardwareType = readUInt16BE(at: 8) ?? 0
+        let packetType = UInt16(bytes[10])
+        let addressLength = Int(bytes[11])
+        let sllNode = PacketDetailNode(
+            id: "sll2",
+            name: "Linux cooked v2",
+            fieldName: "sll2",
+            value: "Linux cooked v2",
+            kind: .layer,
+            byteRange: range(offset: 0, length: min(20, bytes.count)),
+            children: [
+                field(id: "sll2.type", name: "Protocol", fieldName: "sll2.type", value: hex16(ethType), offset: 0, length: 2),
+                field(id: "sll2.ifindex", name: "Interface Index", fieldName: "sll2.if_index", value: "\(interfaceIndex)", offset: 4, length: 4),
+                field(id: "sll2.hatype", name: "Source Hardware Type", fieldName: "sll2.hatype", value: sllHardwareTypeText(hardwareType), offset: 8, length: 2),
+                field(id: "sll2.pkttype", name: "Packet Type", fieldName: "sll2.pkttype", value: sllPacketTypeText(packetType), offset: 10, length: 1),
+                field(id: "sll2.halen", name: "Source address length", fieldName: "sll2.halen", value: "\(addressLength)", offset: 11, length: 1),
+                field(id: "sll2.src", name: "Source", fieldName: "sll2.src", value: sllAddressText(offset: 12, length: addressLength), offset: 12, length: 8),
+            ]
+        )
+        return analyzeCookedPayload(
+            ethType: ethType,
+            headerLength: 20,
+            inheritedNodes: [sllNode],
+            inheritedLayers: [PacketLayer(name: "Linux cooked v2", detailSummary: "Linux cooked capture v2")]
+        )
+    }
+
+    // Dispatch the cooked payload exactly like an Ethernet frame's EtherType.
+    private func analyzeCookedPayload(
+        ethType: UInt16,
+        headerLength: Int,
+        inheritedNodes: [PacketDetailNode],
+        inheritedLayers: [PacketLayer]
+    ) -> AnalyzedPacket {
+        switch ethType {
+        case 0x0806:
+            return analyzeARP(offset: headerLength, inheritedNodes: inheritedNodes, inheritedLayers: inheritedLayers)
+        case 0x0800, 0x86dd:
+            return analyzeIP(offset: headerLength, inheritedNodes: inheritedNodes, inheritedLayers: inheritedLayers)
+        default:
+            var packet = AnalyzedPacket()
+            packet.protocolSummary = hex16(ethType)
+            packet.infoSummary = "Unsupported EtherType \(hex16(ethType))."
+            packet.layers = inheritedLayers
+            packet.detailNodes = inheritedNodes
+            packet.decodeStatus = PacketDecodeStatus(kind: .unsupported, reason: "Unsupported EtherType \(hex16(ethType)).")
+            return packet
+        }
+    }
+
+    private func sllPacketTypeText(_ packetType: UInt16) -> String {
+        switch packetType {
+        case 0:
+            return "Unicast to us"
+        case 1:
+            return "Broadcast"
+        case 2:
+            return "Multicast"
+        case 3:
+            return "Unicast to another host"
+        case 4:
+            return "Sent by us"
+        case 5:
+            return "Loopback"
+        default:
+            return "Unknown (\(packetType))"
+        }
+    }
+
+    private func sllHardwareTypeText(_ hardwareType: UInt16) -> String {
+        switch hardwareType {
+        case 1:
+            return "Ethernet (1)"
+        case 772:
+            return "Loopback (772)"
+        case 801:
+            return "802.11 (801)"
+        case 803:
+            return "802.11 plus radiotap header (803)"
+        case 824, 65534:
+            return "None (no link-layer header)"
+        default:
+            return "\(hardwareType)"
+        }
+    }
+
+    // Link addresses beyond six bytes (Wi-Fi, tun devices) print as hex bytes.
+    private func sllAddressText(offset: Int, length: Int) -> String {
+        guard length > 0 else {
+            return ""
+        }
+        let count = min(length, 8)
+        let parts = (0..<count).compactMap { index -> String? in
+            guard let byte = bytes[safe: offset + index] else { return nil }
+            return String(format: "%02x", byte)
+        }
+        return parts.joined(separator: ":")
     }
 
     private func analyzeEthernet(offset: Int) -> AnalyzedPacket {

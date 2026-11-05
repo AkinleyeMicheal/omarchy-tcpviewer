@@ -33,6 +33,7 @@ public enum CaptureLinkType: String, Sendable, Codable {
     case ethernet
     case loopback
     case raw
+    case linuxSLL
     case unknown
 }
 

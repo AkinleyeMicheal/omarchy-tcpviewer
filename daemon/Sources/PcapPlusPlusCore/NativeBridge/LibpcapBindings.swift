@@ -91,6 +91,9 @@ enum Libpcap {
     static let dltNull: Int32 = 0
     static let dltEthernet: Int32 = 1
     static let dltRaw: Int32 = 12
+    // Linux cooked capture headers (the "any" device and pcaps saved from it).
+    static let dltLinuxSLL: Int32 = 113
+    static let dltLinuxSLL2: Int32 = 276
 
     static func validateFilter(_ expression: String, linkType: Int32 = dltEthernet, snapshotLength: Int32 = 65_535) -> String? {
         guard let handle = pcap_open_dead(linkType, snapshotLength) else {
