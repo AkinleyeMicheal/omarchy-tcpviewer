@@ -11,6 +11,7 @@
 #include <QtQml/qqmlregistration.h>
 
 class DaemonClient;
+class PacketListModel;
 
 class FollowStreamModel : public QAbstractListModel
 {
@@ -57,8 +58,12 @@ public:
     QString summaryLabel() const;
     QString statusText() const;
     QString streamTitle() const;
+    // Wire stream id ("tcp:3") of the loaded snapshot.
+    QString streamID() const { return m_streamID; }
     QString followError() const { return m_followError; }
     void setFollowError(const QString &message);
+    // Empty the transcript on a failed follow (hasStream false afterwards).
+    void clearStream();
 
     // Rows (visible list) containing the query in payload or header text.
     Q_INVOKABLE QVector<int> searchRows(const QString &query) const;
@@ -105,6 +110,10 @@ class FollowSessionController : public QObject
     QML_ELEMENT
     Q_PROPERTY(FollowStreamModel *model READ model CONSTANT)
     Q_PROPERTY(bool loading READ loading NOTIFY loadingChanged)
+    // The packet table feeding the stream catalog (Main wires session.packets).
+    Q_PROPERTY(PacketListModel *packets READ packets WRITE setPackets NOTIFY packetsChanged)
+    // "2 / 5" among same-protocol streams in capture order; "" without one.
+    Q_PROPERTY(QString streamPosition READ streamPosition NOTIFY streamCatalogChanged)
     // Test hook: TCPVIEWER_FOLLOW_REPRESENTATION seeds the transcript mode (0
     // text, 1 hex); -1 lets the window keep its default.
     Q_PROPERTY(int startupRepresentation READ startupRepresentation CONSTANT)
@@ -114,6 +123,13 @@ public:
 
     FollowStreamModel *model() const { return m_model; }
     bool loading() const { return m_loading; }
+    PacketListModel *packets() const { return m_packets; }
+    void setPackets(PacketListModel *packets);
+    QString streamPosition() const;
+    // Upstream Stream stepper: previous/next stream of the same protocol
+    // within the current capture (never switches TCP/UDP families).
+    Q_INVOKABLE bool canStepStream(int delta) const;
+    Q_INVOKABLE void stepStream(int delta);
     int startupRepresentation() const { return m_startupRepresentation; }
 
     Q_INVOKABLE void follow(const QString &packetID);
@@ -126,13 +142,23 @@ signals:
     // can open or raise the Follow Stream window.
     void followReady();
     void loadingChanged();
+    void packetsChanged();
+    void streamCatalogChanged();
 
 private:
     void setLoading(bool loading);
+    // Ordered unique stream ids of the current protocol prefix plus each
+    // stream's first packet id (the stepper's follow target).
+    void rebuildStreamCatalog();
+    int streamIndex() const;
 
     DaemonClient *m_client = nullptr;
     FollowStreamModel *m_model = nullptr;
     bool m_loading = false;
+    PacketListModel *m_packets = nullptr;
+    QStringList m_streamIDs;
+    QHash<QString, QString> m_firstPacketByStream;
+    QString m_currentStreamID;
     // Launch-with-follow hook (TCPVIEWER_FOLLOW_PACKET).
     QString m_startupPacketID;
     int m_startupAttempts = 0;

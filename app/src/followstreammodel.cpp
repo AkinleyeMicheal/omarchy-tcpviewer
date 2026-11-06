@@ -1,6 +1,7 @@
 #include "followstreammodel.h"
 
 #include "daemonclient.h"
+#include "packetmodel.h"
 
 #include <QDateTime>
 #include <QFile>
@@ -301,7 +302,11 @@ void FollowStreamModel::setFollowError(const QString &message)
         return;
     m_followError = message;
     emit followErrorChanged();
-    // A failed follow empties the transcript without dropping window state.
+}
+
+// A failed follow empties the transcript without dropping window state.
+void FollowStreamModel::clearStream()
+{
     beginResetModel();
     m_records.clear();
     m_visible.clear();
@@ -327,6 +332,9 @@ FollowSessionController::FollowSessionController(QObject *parent)
         setLoading(false);
         m_model->applyFollow(data);
         m_model->setFollowError(QString());
+        // The stepper catalog tracks the newly current stream.
+        m_currentStreamID = m_model->streamID();
+        rebuildStreamCatalog();
         emit followReady();
         //() << "follow applied, records:" << data.value(QStringLiteral("record_count")).toInt();
     });
@@ -335,6 +343,7 @@ FollowSessionController::FollowSessionController(QObject *parent)
         if (command != QStringLiteral("stream.follow"))
             return;
         setLoading(false);
+        m_model->clearStream();
         m_model->setFollowError(message);
         //() << "follow failed:" << message;
         emit followReady();
@@ -362,6 +371,74 @@ void FollowSessionController::setLoading(bool loading)
         return;
     m_loading = loading;
     emit loadingChanged();
+}
+
+void FollowSessionController::setPackets(PacketListModel *packets)
+{
+    if (m_packets == packets)
+        return;
+    if (m_packets)
+        disconnect(m_packets, &PacketListModel::revisionChanged, this, nullptr);
+    m_packets = packets;
+    // Live appends and source switches re-derive the stream catalog.
+    if (m_packets) {
+        connect(m_packets, &PacketListModel::revisionChanged, this,
+                [this]() { rebuildStreamCatalog(); });
+    }
+    rebuildStreamCatalog();
+    emit packetsChanged();
+}
+
+// Same-protocol streams in capture order (prefix of "tcp:3"-style ids);
+// the stepper never crosses protocol families.
+void FollowSessionController::rebuildStreamCatalog()
+{
+    m_streamIDs.clear();
+    m_firstPacketByStream.clear();
+    const QString prefix = m_currentStreamID.section(QLatin1Char(':'), 0, 0);
+    if (!m_packets || prefix.isEmpty() || m_packets->rowCount() == 0) {
+        emit streamCatalogChanged();
+        return;
+    }
+    for (int row = 0; row < m_packets->rowCount(); ++row) {
+        const QString streamID = m_packets->streamIdAt(row);
+        if (!streamID.startsWith(prefix + QLatin1Char(':')))
+            continue;
+        if (m_firstPacketByStream.contains(streamID))
+            continue;
+        m_firstPacketByStream.insert(streamID, m_packets->packetIDAt(row));
+        m_streamIDs.append(streamID);
+    }
+    emit streamCatalogChanged();
+}
+
+int FollowSessionController::streamIndex() const
+{
+    return m_currentStreamID.isEmpty() ? -1 : m_streamIDs.indexOf(m_currentStreamID);
+}
+
+QString FollowSessionController::streamPosition() const
+{
+    const int index = streamIndex();
+    if (index < 0 || m_streamIDs.isEmpty())
+        return QString();
+    return QStringLiteral("%1 / %2").arg(index + 1).arg(m_streamIDs.size());
+}
+
+bool FollowSessionController::canStepStream(int delta) const
+{
+    if (m_loading || m_streamIDs.isEmpty())
+        return false;
+    const int target = streamIndex() + delta;
+    return target >= 0 && target < m_streamIDs.size();
+}
+
+void FollowSessionController::stepStream(int delta)
+{
+    if (!canStepStream(delta))
+        return;
+    // Each stream's first packet identifies it to stream.follow.
+    follow(m_firstPacketByStream.value(m_streamIDs.at(streamIndex() + delta)));
 }
 
 void FollowSessionController::follow(const QString &packetID)

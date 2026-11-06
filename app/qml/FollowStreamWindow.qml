@@ -74,13 +74,30 @@ Window {
                     color: Theme.label
                 }
 
+                // Upstream Stream stepper: previous/next stream of the same
+                // protocol within the current capture.
+                ToolButton {
+                    enabled: window.follow.canStepStream(-1)
+                    text: "‹"
+                    onClicked: window.follow.stepStream(-1)
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Previous stream"
+                }
+
                 Text {
-                    text: window.follow.model.hasStream
-                        ? window.follow.model.streamTitle.replace("· Stream ", "")
-                        : "—"
+                    text: window.follow.streamPosition !== ""
+                        ? window.follow.streamPosition : "—"
                     font.family: Theme.monoFont
                     font.pixelSize: Theme.uiSize
                     color: Theme.label
+                }
+
+                ToolButton {
+                    enabled: window.follow.canStepStream(1)
+                    text: "›"
+                    onClicked: window.follow.stepStream(1)
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Next stream"
                 }
             }
         }
