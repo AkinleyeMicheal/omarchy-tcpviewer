@@ -486,10 +486,71 @@ void DiffController::recomputeDetails()
 
 void DiffController::recomputeBytes()
 {
+    m_byteChanges = m_left.bytesLoaded && m_right.bytesLoaded
+        ? diffByteChanges(m_left.bytes, m_right.bytes)
+        : QVector<DiffByteChangePair>();
+    m_byteChangeList.clear();
+    m_byteChangeList.reserve(m_byteChanges.size());
+    for (const DiffByteChangePair &change : m_byteChanges) {
+        QVariantMap entry;
+        entry.insert(QStringLiteral("leftOffset"), change.leftOffset);
+        entry.insert(QStringLiteral("leftLength"), change.leftLength);
+        entry.insert(QStringLiteral("rightOffset"), change.rightOffset);
+        entry.insert(QStringLiteral("rightLength"), change.rightLength);
+        entry.insert(QStringLiteral("description"), byteChangeDescription(change));
+        m_byteChangeList.append(entry);
+    }
+    // The single-range properties keep the envelope of all edits.
     m_byteRange = DiffByteRange();
-    if (m_left.bytesLoaded && m_right.bytesLoaded)
-        m_byteRange = diffBytes(m_left.bytes, m_right.bytes);
+    const auto envelope = [](const QVector<DiffByteChangePair> &changes, bool left, int &offset, int &length) {
+        int start = -1;
+        int end = -1;
+        for (const DiffByteChangePair &change : changes) {
+            const int changeOffset = left ? change.leftOffset : change.rightOffset;
+            const int changeLength = left ? change.leftLength : change.rightLength;
+            if (changeOffset < 0)
+                continue;
+            if (start < 0 || changeOffset < start)
+                start = changeOffset;
+            end = qMax(end, changeOffset + changeLength);
+        }
+        if (start >= 0) {
+            offset = start;
+            length = qMax(0, end - start);
+        }
+    };
+    envelope(m_byteChanges, true, m_byteRange.leftOffset, m_byteRange.leftLength);
+    envelope(m_byteChanges, false, m_byteRange.rightOffset, m_byteRange.rightLength);
     emit bytesChanged();
+}
+
+int DiffController::nextByteChange(int current, bool backwards) const
+{
+    if (m_byteChanges.isEmpty())
+        return -1;
+    const int count = static_cast<int>(m_byteChanges.size());
+    if (current < 0)
+        return backwards ? count - 1 : 0;
+    return (current + (backwards ? -1 : 1) + count) % count;
+}
+
+QVariantMap DiffController::findBytes(int side, const QString &needleText, int start) const
+{
+    QVariantMap result;
+    const QByteArray needle = parseHexByteText(needleText);
+    if (needle.isEmpty()) {
+        result.insert(QStringLiteral("error"), QStringLiteral("Enter pairs of hex digits"));
+        return result;
+    }
+    const QByteArray &bytes = side == 1 ? m_right.bytes : m_left.bytes;
+    const int offset = findByteSequence(bytes, needle, start);
+    if (offset < 0) {
+        result.insert(QStringLiteral("error"), QStringLiteral("No matches"));
+        return result;
+    }
+    result.insert(QStringLiteral("offset"), offset);
+    result.insert(QStringLiteral("length"), needle.size());
+    return result;
 }
 
 void DiffController::rebuildChangeRows()

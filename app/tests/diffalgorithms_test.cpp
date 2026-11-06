@@ -16,6 +16,11 @@ private slots:
     void byteDiffTrimsCommonEdges();
     void byteDiffReportsPureInsertion();
     void byteDiffEqualHasNoRange();
+    void byteChangesSplitScatteredEdits();
+    void byteChangesReportInsertionAndDeletion();
+    void byteChangesIdenticalIsEmpty();
+    void byteSearchParsesHexText();
+    void byteSearchFindsAndWraps();
 };
 
 void DiffAlgorithmsTest::detailLinesUseTabsAndSplitMultilineValues()
@@ -125,6 +130,94 @@ void DiffAlgorithmsTest::byteDiffEqualHasNoRange()
     QCOMPARE(range.leftLength, 0);
     QCOMPARE(range.rightOffset, -1);
     QCOMPARE(range.rightLength, 0);
+}
+
+// Two edits separated by an 8-byte common run highlight individually
+// (upstream HFByteArrayEditScript granularity).
+void DiffAlgorithmsTest::byteChangesSplitScatteredEdits()
+{
+    const QByteArray left = QByteArrayLiteral("AAXCCCCCCCCYDD");
+    const QByteArray right = QByteArrayLiteral("AAZCCCCCCCCWDD");
+    const QVector<DiffByteChangePair> changes = diffByteChanges(left, right);
+    QCOMPARE(changes.size(), 2);
+    QCOMPARE(changes.at(0).leftOffset, 2);
+    QCOMPARE(changes.at(0).leftLength, 1);
+    QCOMPARE(changes.at(0).rightOffset, 2);
+    QCOMPARE(changes.at(0).rightLength, 1);
+    QCOMPARE(changes.at(1).leftOffset, 11);
+    QCOMPARE(changes.at(1).leftLength, 1);
+    QCOMPARE(changes.at(1).rightOffset, 11);
+    QCOMPARE(changes.at(1).rightLength, 1);
+    QCOMPARE(byteChangeDescription(changes.at(0)),
+             QStringLiteral("Changed 1 → 1 bytes · Left 0x2 · Right 0x2"));
+}
+
+void DiffAlgorithmsTest::byteChangesReportInsertionAndDeletion()
+{
+    const QVector<DiffByteChangePair> added = diffByteChanges(
+        QByteArrayLiteral("ab"), QByteArrayLiteral("abXY"));
+    QCOMPARE(added.size(), 1);
+    QCOMPARE(added.at(0).leftOffset, 2);
+    QCOMPARE(added.at(0).leftLength, 0);
+    QCOMPARE(added.at(0).rightOffset, 2);
+    QCOMPARE(added.at(0).rightLength, 2);
+    QCOMPARE(byteChangeDescription(added.at(0)),
+             QStringLiteral("Added 2 bytes at Right 0x2"));
+
+    const QVector<DiffByteChangePair> removed = diffByteChanges(
+        QByteArrayLiteral("abXY"), QByteArrayLiteral("ab"));
+    QCOMPARE(removed.size(), 1);
+    QCOMPARE(removed.at(0).leftOffset, 2);
+    QCOMPARE(removed.at(0).leftLength, 2);
+    QCOMPARE(removed.at(0).rightOffset, 2);
+    QCOMPARE(removed.at(0).rightLength, 0);
+    QCOMPARE(byteChangeDescription(removed.at(0)),
+             QStringLiteral("Removed 2 bytes at Left 0x2"));
+}
+
+void DiffAlgorithmsTest::byteChangesIdenticalIsEmpty()
+{
+    QVERIFY(diffByteChanges(QByteArrayLiteral("same"), QByteArrayLiteral("same")).isEmpty());
+    // Empty vs non-empty is one change covering the whole right side.
+    const QVector<DiffByteChangePair> changes = diffByteChanges({}, QByteArrayLiteral("abcd"));
+    QCOMPARE(changes.size(), 1);
+    QCOMPARE(changes.at(0).leftOffset, 0);
+    QCOMPARE(changes.at(0).leftLength, 0);
+    QCOMPARE(changes.at(0).rightOffset, 0);
+    QCOMPARE(changes.at(0).rightLength, 4);
+}
+
+void DiffAlgorithmsTest::byteSearchParsesHexText()
+{
+    // Whitespace-insensitive pairs, mixed case (upstream DiffBinarySearch).
+    const QByteArray parsed = parseHexByteText(QStringLiteral("48 65  6c"));
+    QCOMPARE(parsed.size(), 3);
+    QCOMPARE(static_cast<unsigned char>(parsed.at(0)), 0x48);
+    QCOMPARE(static_cast<unsigned char>(parsed.at(1)), 0x65);
+    QCOMPARE(static_cast<unsigned char>(parsed.at(2)), 0x6c);
+    // Odd digit counts, non-hex digits, and empty text are invalid.
+    QVERIFY(parseHexByteText(QStringLiteral("486")).isEmpty());
+    QVERIFY(parseHexByteText(QStringLiteral("zz")).isEmpty());
+    QVERIFY(parseHexByteText(QStringLiteral("")).isEmpty());
+    // Split pairs across spaces still parse ("4 86c" → 48 6c).
+    const QByteArray split = parseHexByteText(QStringLiteral("4 8 6 c"));
+    QCOMPARE(split.size(), 2);
+    QCOMPARE(static_cast<unsigned char>(split.at(0)), 0x48);
+    QCOMPARE(static_cast<unsigned char>(split.at(1)), 0x6c);
+}
+
+void DiffAlgorithmsTest::byteSearchFindsAndWraps()
+{
+    const QByteArray haystack = QByteArray::fromHex("48656c6c6f00576f726c64"); // Hello<NUL>World
+    QCOMPARE(findByteSequence(haystack, QByteArrayLiteral("Wo"), 0), 6);
+    // Continues after the selection start.
+    QCOMPARE(findByteSequence(haystack, QByteArrayLiteral("l"), 4), 9);
+    // Wraps to the beginning (upstream Find Next cycling).
+    QCOMPARE(findByteSequence(haystack, QByteArrayLiteral("He"), 3), 0);
+    QVERIFY(findByteSequence(haystack, QByteArrayLiteral("zz"), 0) < 0);
+    // Needles longer than the haystack never match.
+    QVERIFY(findByteSequence(QByteArrayLiteral("ab"), QByteArrayLiteral("abc"), 0) < 0);
+    QVERIFY(findByteSequence(haystack, {}, 0) < 0);
 }
 
 QTEST_GUILESS_MAIN(DiffAlgorithmsTest)

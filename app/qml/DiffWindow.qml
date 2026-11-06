@@ -20,6 +20,12 @@ Window {
     visible: false
 
     property int changeCursor: -1
+    // Byte-change navigation cursor (upstream currentChange, wrap-around).
+    property int byteCursor: -1
+    // Hex search bar state (upstream DiffBinaryViewController search bar).
+    property bool searchActive: false
+    property string searchSide: "left"
+    property string searchStatus: ""
 
     readonly property color addTint: Qt.rgba(Theme.systemGreen.r, Theme.systemGreen.g,
                                              Theme.systemGreen.b, 0.16)
@@ -32,10 +38,60 @@ Window {
         show()
         raise()
         requestActivate()
+        // CI/screenshot hook: step to the first change / open the hex search
+        // once both sides' bytes have arrived.
+        if (window.diff.startupStep || window.diff.startupSearch !== "")
+            hookTimer.start()
+    }
+
+    Timer {
+        id: hookTimer
+        interval: 500
+        onTriggered: {
+            if (window.diff.startupSearch !== "") {
+                window.openSearch()
+                searchField.text = window.diff.startupSearch
+                window.findNext()
+            } else {
+                window.navigate(false)
+            }
+        }
+    }
+
+    // Change count of the active comparison kind (drives Prev/Next).
+    function navigateCount() {
+        return window.diff.contentKind === "bytes"
+            ? window.diff.byteChanges.length : window.diff.differenceCount
+    }
+
+    // Per-pane tint ranges of the byte edits.
+    function byteHighlights(side) {
+        const list = []
+        const changes = window.diff.byteChanges
+        for (let i = 0; i < changes.length; ++i) {
+            const change = changes[i]
+            const offset = side === "left" ? change.leftOffset : change.rightOffset
+            const length = side === "left" ? change.leftLength : change.rightLength
+            if (length > 0)
+                list.push({offset: offset, length: length})
+        }
+        return list
     }
 
     function navigate(backwards) {
-        if (!window.diff.ready || window.diff.differenceCount === 0)
+        if (!window.diff.ready)
+            return
+        if (window.diff.contentKind === "bytes") {
+            if (window.diff.byteChanges.length === 0)
+                return
+            window.byteCursor = window.diff.nextByteChange(window.byteCursor, backwards)
+            const change = window.diff.byteChanges[window.byteCursor]
+            // Upstream revealCurrentChange selects and centers both panes.
+            leftHexView.select(change.leftOffset, change.leftLength)
+            rightHexView.select(change.rightOffset, change.rightLength)
+            return
+        }
+        if (window.diff.differenceCount === 0)
             return
         window.changeCursor = window.diff.nextChangeRow(window.changeCursor, backwards)
         if (window.diff.displayMode === "unified")
@@ -44,9 +100,42 @@ Window {
             sideView.positionViewAtIndex(window.changeCursor, ListView.Center)
     }
 
+    // Upstream showSearchBar/findNext/closeSearch (hex byte sequence search).
+    function openSearch() {
+        if (window.diff.contentKind !== "bytes" || !window.diff.ready)
+            return
+        window.searchActive = true
+        searchField.forceActiveFocus()
+        searchField.selectAll()
+    }
+
+    function closeSearch() {
+        window.searchActive = false
+        window.searchStatus = ""
+    }
+
+    function findNext() {
+        if (!window.diff.ready)
+            return
+        const side = window.searchSide === "left" ? 0 : 1
+        const view = side === 0 ? leftHexView : rightHexView
+        const bytes = side === 0 ? window.diff.leftBytes : window.diff.rightBytes
+        // Find Next continues after the current selection, wrapping around.
+        const start = view.selectionOffset >= 0
+            ? view.selectionOffset + view.selectionLength : 0
+        const result = window.diff.findBytes(side, searchField.text,
+                                             Math.min(start, bytes.length))
+        if (result.error !== undefined) {
+            window.searchStatus = result.error
+            return
+        }
+        view.select(result.offset, result.length)
+        window.searchStatus = "0x" + result.offset.toString(16).toUpperCase()
+    }
+
     Shortcut {
         sequences: ["Escape"]
-        onActivated: window.close()
+        onActivated: window.searchActive ? window.closeSearch() : window.close()
     }
 
     Shortcut {
@@ -57,6 +146,13 @@ Window {
     Shortcut {
         sequences: ["Shift+F7"]
         onActivated: window.navigate(true)
+    }
+
+    // Upstream ⌘F opens the binary view's hex search bar.
+    Shortcut {
+        sequences: ["Ctrl+F"]
+        enabled: window.diff.contentKind === "bytes"
+        onActivated: window.openSearch()
     }
 
     ColumnLayout {
@@ -104,12 +200,12 @@ Window {
 
                 FlatButton {
                     text: "Prev"
-                    enabled: window.diff.differenceCount > 0 && window.diff.contentKind === "details"
+                    enabled: window.navigateCount() > 0
                     onClicked: window.navigate(true)
                 }
                 FlatButton {
                     text: "Next"
-                    enabled: window.diff.differenceCount > 0 && window.diff.contentKind === "details"
+                    enabled: window.navigateCount() > 0
                     onClicked: window.navigate(false)
                 }
                 FlatButton {
@@ -391,10 +487,82 @@ Window {
                 }
 
                 // Byte comparison (upstream DiffBinaryViewController)
-                RowLayout {
+                ColumnLayout {
                     anchors.fill: parent
                     visible: window.diff.ready && window.diff.contentKind === "bytes"
                     spacing: 0
+
+                    // Hex search bar (upstream: hidden until ⌘F, side follows
+                    // the focused pane; the port toggles the side explicitly).
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 34
+                        visible: window.searchActive
+                        color: Theme.headerBackground
+
+                        Rectangle { width: parent.width; height: 1; color: Theme.separator }
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 8
+                            anchors.rightMargin: 8
+                            spacing: 8
+
+                            SideButton {
+                                label: "L"
+                                active: window.searchSide === "left"
+                                onClicked: window.searchSide = "left"
+                            }
+                            SideButton {
+                                label: "R"
+                                active: window.searchSide === "right"
+                                onClicked: window.searchSide = "right"
+                            }
+
+                            TextField {
+                                id: searchField
+                                Layout.preferredWidth: 300
+                                placeholderText: "Find hex bytes, e.g. 48 65 6C 6C 6F"
+                                font.family: Theme.monoFont
+                                font.pixelSize: Theme.uiSmall
+                                color: Theme.label
+                                background: Rectangle {
+                                    radius: 6
+                                    color: Theme.contentBackground
+                                    border.width: searchField.activeFocus ? 1 : 0
+                                    border.color: Theme.accent
+                                }
+                                Keys.onReturnPressed: window.findNext()
+                                Keys.onEscapePressed: window.closeSearch()
+                            }
+
+                            FlatButton {
+                                text: "Find Next"
+                                onClicked: window.findNext()
+                            }
+                            FlatButton {
+                                text: "Done"
+                                onClicked: window.closeSearch()
+                            }
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: window.searchStatus
+                                textFormat: Text.PlainText
+                                elide: Text.ElideRight
+                                font.family: Theme.uiFont
+                                font.pixelSize: Theme.uiSmall
+                                color: window.searchStatus === "No matches"
+                                       || window.searchStatus === "Enter pairs of hex digits"
+                                    ? Theme.systemRed : Theme.secondaryLabel
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        spacing: 0
 
                     ColumnLayout {
                         Layout.fillWidth: true
@@ -421,13 +589,14 @@ Window {
                         }
 
                         HexView {
+                            id: leftHexView
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             bytes: window.diff.leftBytes
-                            highlightOffset: window.diff.leftChangeOffset
-                            highlightLength: window.diff.leftChangeLength
+                            highlights: window.byteHighlights("left")
                             highlightColor: Qt.rgba(Theme.systemOrange.r, Theme.systemOrange.g,
                                                     Theme.systemOrange.b, 0.30)
+                            selectionColor: Theme.selection
                             textColor: Theme.label
                             secondaryTextColor: Theme.secondaryLabel
                             backgroundColor: Theme.contentBackground
@@ -467,19 +636,21 @@ Window {
                         }
 
                         HexView {
+                            id: rightHexView
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             bytes: window.diff.rightBytes
-                            highlightOffset: window.diff.rightChangeOffset
-                            highlightLength: window.diff.rightChangeLength
+                            highlights: window.byteHighlights("right")
                             highlightColor: Qt.rgba(Theme.systemOrange.r, Theme.systemOrange.g,
                                                     Theme.systemOrange.b, 0.30)
+                            selectionColor: Theme.selection
                             textColor: Theme.label
                             secondaryTextColor: Theme.secondaryLabel
                             backgroundColor: Theme.contentBackground
                             fontFamily: Theme.monoFont
                             pixelSize: Theme.packetFontSize
                         }
+                    }
                     }
                 }
             }
@@ -502,9 +673,14 @@ Window {
                     : !window.diff.ready
                         ? ""
                         : window.diff.contentKind === "bytes"
-                            ? (window.diff.leftChangeLength > 0 || window.diff.rightChangeLength > 0
-                                ? "Changed bytes highlighted"
-                                : "No byte differences")
+                            ? (window.diff.byteChanges.length === 0
+                                ? "No byte differences"
+                                : window.byteCursor >= 0
+                                    ? "Difference " + (window.byteCursor + 1) + " of "
+                                      + window.diff.byteChanges.length + " · "
+                                      + window.diff.byteChanges[window.byteCursor].description
+                                    : window.diff.byteChanges.length + " changed range(s) · "
+                                      + "F7 / Shift+F7 to navigate · Ctrl+F to find hex bytes")
                             : window.diff.differenceCount === 0
                                 ? "No differences"
                                 : window.diff.differenceCount + " changed line(s) · F7 / Shift+F7 to navigate"
@@ -514,6 +690,16 @@ Window {
                 font.pixelSize: Theme.uiSmall
                 color: window.diff.error !== "" ? Theme.systemRed : Theme.secondaryLabel
             }
+        }
+    }
+
+    // New Left/Right frames reset the byte-change cursor and selection.
+    Connections {
+        target: window.diff
+        function onBytesChanged() {
+            window.byteCursor = -1
+            leftHexView.select(-1, 0)
+            rightHexView.select(-1, 0)
         }
     }
 

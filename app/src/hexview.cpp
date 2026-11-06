@@ -46,6 +46,75 @@ void HexView::setHighlightLength(int length)
     update();
 }
 
+QVariantList HexView::highlights() const
+{
+    QVariantList list;
+    list.reserve(m_highlights.size());
+    for (const auto &range : m_highlights) {
+        QVariantMap entry;
+        entry.insert(QStringLiteral("offset"), range.first);
+        entry.insert(QStringLiteral("length"), range.second);
+        list.append(entry);
+    }
+    return list;
+}
+
+void HexView::setHighlights(const QVariantList &highlights)
+{
+    QVector<QPair<int, int>> ranges;
+    ranges.reserve(highlights.size());
+    for (const QVariant &value : highlights) {
+        const QVariantMap entry = value.toMap();
+        const int offset = entry.value(QStringLiteral("offset")).toInt();
+        const int length = qMax(0, entry.value(QStringLiteral("length")).toInt());
+        if (offset < 0 || length == 0)
+            continue;
+        ranges.append({offset, length});
+    }
+    if (ranges == m_highlights)
+        return;
+    m_highlights = ranges;
+    ensureHighlightVisible();
+    emit highlightChanged();
+    update();
+}
+
+void HexView::setSelectionOffset(int offset)
+{
+    offset = qMax(-1, offset);
+    if (offset == m_selectionOffset)
+        return;
+    m_selectionOffset = offset;
+    ensureOffsetVisible(m_selectionOffset);
+    emit selectionChanged();
+    update();
+}
+
+void HexView::setSelectionLength(int length)
+{
+    length = qMax(0, length);
+    if (length == m_selectionLength)
+        return;
+    m_selectionLength = length;
+    ensureOffsetVisible(m_selectionOffset);
+    emit selectionChanged();
+    update();
+}
+
+void HexView::select(int offset, int length)
+{
+    if (offset == m_selectionOffset && length == m_selectionLength) {
+        ensureOffsetVisible(offset);
+        update();
+        return;
+    }
+    m_selectionOffset = qMax(-1, offset);
+    m_selectionLength = qMax(0, length);
+    ensureOffsetVisible(m_selectionOffset);
+    emit selectionChanged();
+    update();
+}
+
 void HexView::setFontFamily(const QString &family)
 {
     if (family == m_fontFamily)
@@ -92,6 +161,15 @@ void HexView::setHighlightColor(const QColor &color)
     update();
 }
 
+void HexView::setSelectionColor(const QColor &color)
+{
+    if (color == m_selectionColor)
+        return;
+    m_selectionColor = color;
+    emit colorsChanged();
+    update();
+}
+
 void HexView::setBackgroundColor(const QColor &color)
 {
     if (color == m_backgroundColor)
@@ -121,12 +199,12 @@ void HexView::clampScroll()
     m_scrollY = std::clamp(m_scrollY, 0.0, maximumScroll());
 }
 
-void HexView::ensureHighlightVisible()
+void HexView::ensureOffsetVisible(int offset)
 {
-    if (m_highlightOffset < 0 || height() <= 0)
+    if (offset < 0 || height() <= 0)
         return;
     const qreal lineHeight = rowHeight();
-    const int row = m_highlightOffset / bytesPerRow;
+    const int row = offset / bytesPerRow;
     const qreal top = 6.0 + row * lineHeight;
     const qreal bottom = top + lineHeight;
     if (top < m_scrollY)
@@ -134,6 +212,11 @@ void HexView::ensureHighlightVisible()
     else if (bottom > m_scrollY + height())
         m_scrollY = bottom - height();
     clampScroll();
+}
+
+void HexView::ensureHighlightVisible()
+{
+    ensureOffsetVisible(m_highlightOffset);
 }
 
 void HexView::wheelEvent(QWheelEvent *event)
@@ -226,23 +309,51 @@ void HexView::paint(QPainter *painter)
         painter->setPen(m_secondaryTextColor);
         painter->drawText(QPointF(asciiX, textY), asciiLine);
 
-        if (m_highlightOffset >= 0 && m_highlightLength > 0) {
-            const int highlightStart = m_highlightOffset;
-            const int highlightEnd = m_highlightOffset + m_highlightLength;
+        // Diff tint over every changed range, then the stronger selection
+        // (current change or search match) on top; text is redrawn for
+        // covered bytes so it stays legible over both fills.
+        QVector<QPair<int, int>> ranges = m_highlights;
+        if (m_highlightOffset >= 0 && m_highlightLength > 0)
+            ranges.append({m_highlightOffset, m_highlightLength});
+        if (!ranges.isEmpty() || (m_selectionOffset >= 0 && m_selectionLength > 0)) {
+            auto covered = [base, rowBytes](const QVector<QPair<int, int>> &list, int index) {
+                for (const auto &range : list) {
+                    if (index >= range.first && index < range.first + range.second)
+                        return true;
+                }
+                return false;
+            };
+            QVector<QPair<int, int>> selection;
+            if (m_selectionOffset >= 0 && m_selectionLength > 0)
+                selection.append({m_selectionOffset, m_selectionLength});
+
             painter->setPen(Qt::NoPen);
             painter->setBrush(m_highlightColor);
-            for (int i = 0; i < rowBytes; ++i) {
-                const int index = base + i;
-                if (index < highlightStart || index >= highlightEnd)
-                    continue;
-                const qreal byteX = hexX + i * 3.0 * charWidth + (i >= groupSize ? groupGap : 0.0);
-                painter->drawRect(QRectF(byteX - 1.0, y + 1.0, charWidth * 2.0 + 1.0, lineHeight - 2.0));
-                painter->drawRect(QRectF(asciiX + i * charWidth, y + 1.0, charWidth, lineHeight - 2.0));
+            for (const auto &range : ranges) {
+                for (int i = 0; i < rowBytes; ++i) {
+                    const int index = base + i;
+                    if (index < range.first || index >= range.first + range.second)
+                        continue;
+                    const qreal byteX = hexX + i * 3.0 * charWidth + (i >= groupSize ? groupGap : 0.0);
+                    painter->drawRect(QRectF(byteX - 1.0, y + 1.0, charWidth * 2.0 + 1.0, lineHeight - 2.0));
+                    painter->drawRect(QRectF(asciiX + i * charWidth, y + 1.0, charWidth, lineHeight - 2.0));
+                }
+            }
+            painter->setBrush(m_selectionColor);
+            for (const auto &range : selection) {
+                for (int i = 0; i < rowBytes; ++i) {
+                    const int index = base + i;
+                    if (index < range.first || index >= range.first + range.second)
+                        continue;
+                    const qreal byteX = hexX + i * 3.0 * charWidth + (i >= groupSize ? groupGap : 0.0);
+                    painter->drawRect(QRectF(byteX - 1.0, y + 1.0, charWidth * 2.0 + 1.0, lineHeight - 2.0));
+                    painter->drawRect(QRectF(asciiX + i * charWidth, y + 1.0, charWidth, lineHeight - 2.0));
+                }
             }
             painter->setPen(m_textColor);
             for (int i = 0; i < rowBytes; ++i) {
                 const int index = base + i;
-                if (index < highlightStart || index >= highlightEnd)
+                if (!covered(ranges, index) && !covered(selection, index))
                     continue;
                 const qreal byteX = hexX + i * 3.0 * charWidth + (i >= groupSize ? groupGap : 0.0);
                 const unsigned char value = static_cast<unsigned char>(m_bytes.at(index));

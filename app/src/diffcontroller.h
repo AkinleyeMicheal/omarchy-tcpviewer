@@ -86,6 +86,12 @@ class DiffController : public QObject
     Q_PROPERTY(QVariantList unifiedRows READ unifiedRows NOTIFY rowsChanged)
     Q_PROPERTY(QVariantList changeRows READ changeRows NOTIFY rowsChanged)
     Q_PROPERTY(int differenceCount READ differenceCount NOTIFY rowsChanged)
+    // Byte-level edits of the current Left/Right frames (upstream
+    // DiffBinaryComparison changes) with upstream description wording.
+    Q_PROPERTY(QVariantList byteChanges READ byteChanges NOTIFY bytesChanged)
+    // CI/screenshot hooks: step to the first change / open the hex search.
+    Q_PROPERTY(bool startupStep READ startupStep CONSTANT)
+    Q_PROPERTY(QString startupSearch READ startupSearch CONSTANT)
     Q_PROPERTY(bool ready READ ready NOTIFY stateChanged)
     Q_PROPERTY(bool loading READ loading NOTIFY stateChanged)
     Q_PROPERTY(QString error READ error NOTIFY stateChanged)
@@ -108,6 +114,9 @@ public:
     QVariantList unifiedRows() const { return m_unifiedRows; }
     QVariantList changeRows() const { return m_changeRows; }
     int differenceCount() const { return m_changeRows.size(); }
+    QVariantList byteChanges() const { return m_byteChangeList; }
+    bool startupStep() const { return qEnvironmentVariable("TCPVIEWER_DIFF_STEP") == QLatin1String("1"); }
+    QString startupSearch() const { return qEnvironmentVariable("TCPVIEWER_DIFF_SEARCH"); }
     bool ready() const;
     bool loading() const;
     QString error() const;
@@ -129,6 +138,13 @@ public:
     Q_INVOKABLE void removeEntry(const QString &entryID);
     Q_INVOKABLE void clear();
     Q_INVOKABLE int nextChangeRow(int currentRow, bool backwards) const;
+    // Wrap-around byte-change navigation (upstream moveChange modulo).
+    Q_INVOKABLE int nextByteChange(int current, bool backwards) const;
+    // Upstream DiffBinarySearch over the side's bytes (0 left, 1 right):
+    // whitespace-insensitive hex byte pairs, first occurrence at/after start
+    // wrapping to the beginning. {offset, length} on a match, {error} with
+    // the upstream status wording otherwise.
+    Q_INVOKABLE QVariantMap findBytes(int side, const QString &needleText, int start) const;
 
 signals:
     void contentKindChanged();
@@ -169,6 +185,8 @@ private:
     QVariantList m_sideBySideRows;
     QVariantList m_unifiedRows;
     QVariantList m_changeRows;
+    QVariantList m_byteChangeList;
+    QVector<DiffByteChangePair> m_byteChanges;
     DiffByteRange m_byteRange;
 };
 
