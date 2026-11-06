@@ -286,17 +286,52 @@ or create a new session instead of re-saving. A session opens by itself —
 it cannot be merged with other capture files in one import. The format is
 byte-compatible with the macOS app, so files interchange both ways.
 
+## Follow Stream
+
+Select a packet and run **Tools ▸ Follow TCP Stream** (or right-click →
+Follow TCP/UDP/DNS Stream) to reassemble the conversation in a dedicated
+window: both directions or either one alone, text or hex rendering, transcript
+search, and Save/Export for the transcript or either side's bytes. DNS rows
+surface **Follow DNS Stream** and follow the underlying TCP or UDP stream.
+The **Stream** stepper (`‹` / `›`) moves to the previous or next stream of the
+same protocol within the capture, in capture order — it never switches
+between TCP and UDP.
+
+## Endpoint statistics
+
+**Statistics ▸ Endpoints…** (`Ctrl+Shift+S`) ranks traffic per group — Apps,
+Domains, IPv4, IPv6, TCP, UDP — with Tx/Rx packets and bytes, a byte-share
+summary, and totals. The six tabs share one window:
+
+- Search (`Ctrl+F`) matches whitespace-split terms against the key, address,
+  port, protocol, client, and domain; every term must be contained.
+- Column headers sort busiest-first by default (Bytes descending); clicking a
+  numeric header starts descending, a text header ascending, and clicking
+  again toggles. Ports sort numerically when parseable.
+- Right-click a header to show/hide columns or **Reset Columns**; drag the
+  header edges to resize (40–1200 px). Layouts persist per group.
+- `Ctrl+C` copies the selected rows as CSV (quoting, CRLF, and spreadsheet
+  formula protection); the context menu copies the cell, address, domain, or
+  app, plus all rows as CSV or JSON.
+- Double-click a row (or **Show Related Packets**) jumps to its packets:
+  the matching sidebar scope for Apps/Domains/addresses, or an
+  `ip.addr && tcp.port` display filter for TCP/UDP endpoints.
+
 ## Diff
 
 Select a packet and press `Ctrl+Y` (or right-click → Diff Selected Packet) to
 add it to the Diff pool; add a second packet the same way. The window compares:
 
 - **Packet Details** as side-by-side or unified text with changed lines tinted.
-- **Packet Bytes** as two hex panes with the changed range highlighted.
+- **Packet Bytes** as two hex panes with every changed byte range highlighted;
+  `F7` / `Shift+F7` step through the changes with wrap-around.
 
-`F7` / `Shift+F7` jump between changed lines. `Clear` empties the pool. Detail
-diffs are capped at 2000 lines per side; byte diffs trim the common prefix and
-suffix before highlighting, so length changes do not mark every later byte.
+`Ctrl+F` opens the bytes search bar: type hex byte pairs (`48 65 6C` — spaces
+optional) and **Find Next** jumps match to match on the chosen side (L/R),
+continuing after the current match and wrapping; the status shows the match
+offset. `Clear` empties the pool. Detail diffs are capped at 2000 lines per
+side; byte diffs split on common runs so scattered field edits highlight
+individually, and insertions/deletions report where they sit.
 
 ## Source tree and app attribution
 
