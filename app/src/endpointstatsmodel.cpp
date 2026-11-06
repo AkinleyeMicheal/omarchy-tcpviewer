@@ -2,11 +2,88 @@
 
 #include "packetmodel.h"
 
+#include <QCollator>
+#include <QRegularExpression>
 #include <QLocale>
+#include <QSet>
 #include <algorithm>
 
 namespace {
 constexpr int kColumnCount = 12;
+
+// Column catalog shared with the exporters; wire order matches upstream
+// EndpointStatisticsTableColumn (titles, snake_case JSON keys).
+constexpr const char *kColumnTitles[kColumnCount] = {
+    "Address", "Port", "Protocol", "Client", "Domain", "Packets",
+    "Bytes", "Tx Packets", "Tx Bytes", "Rx Packets", "Rx Bytes", "Summary",
+};
+constexpr const char *kColumnJsonKeys[kColumnCount] = {
+    "address", "port", "protocol", "client", "domain", "packets",
+    "bytes", "tx_packets", "tx_bytes", "rx_packets", "rx_bytes", "summary",
+};
+
+// Upstream numeric columns sort busiest-first on first click.
+bool isNumericColumn(int column)
+{
+    return column >= EndpointStatisticsModel::Column::Packets
+        && column <= EndpointStatisticsModel::Column::RxBytes;
+}
+
+int compareQuantified(qint64 lhs, qint64 rhs)
+{
+    return lhs < rhs ? -1 : (lhs > rhs ? 1 : 0);
+}
+
+bool needsFormulaProtection(const QString &value);
+
+// CSV field: quote when it contains a delimiter/newline; prefix an
+// apostrophe so spreadsheet apps do not run formula injection.
+QString csvField(const QString &value, bool protectsFormula)
+{
+    QString field = value;
+    if (protectsFormula && needsFormulaProtection(field))
+        field.prepend(QLatin1Char('\''));
+    if (field.contains(QLatin1Char(',')) || field.contains(QLatin1Char('"'))
+        || field.contains(QLatin1Char('\r')) || field.contains(QLatin1Char('\n'))) {
+        field.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+        return QLatin1Char('"') + field + QLatin1Char('"');
+    }
+    return field;
+}
+
+bool needsFormulaProtection(const QString &value)
+{
+    if (!value.isEmpty()
+        && (value.at(0) == QLatin1Char('\t') || value.at(0) == QLatin1Char('\r')))
+        return true;
+    for (const QChar &character : value) {
+        if (!character.isSpace())
+            return QStringLiteral("=+-@").contains(character);
+    }
+    return false;
+}
+
+QString jsonString(const QString &value)
+{
+    QString result = QStringLiteral("\"");
+    for (const QChar &character : value) {
+        switch (character.unicode()) {
+        case 0x22: result += QStringLiteral("\\\""); break;
+        case 0x5C: result += QStringLiteral("\\\\"); break;
+        case 0x08: result += QStringLiteral("\\b"); break;
+        case 0x0C: result += QStringLiteral("\\f"); break;
+        case 0x0A: result += QStringLiteral("\\n"); break;
+        case 0x0D: result += QStringLiteral("\\r"); break;
+        case 0x09: result += QStringLiteral("\\t"); break;
+        default:
+            if (character.unicode() < 0x20)
+                result += QStringLiteral("\\u%1").arg(int(character.unicode()), 4, 16, QLatin1Char('0'));
+            else
+                result += character;
+        }
+    }
+    return result + QLatin1Char('"');
+}
 
 // Upstream numeric cells use grouped integers; footers humanize bytes.
 QString groupedCount(qint64 value)
@@ -148,6 +225,7 @@ QHash<int, QByteArray> EndpointStatisticsModel::roleNames() const
         {SummaryRole, "summary"},
         {IsMultipleRole, "isMultiple"},
         {CountRole, "count"},
+        {KeyRole, "key"},
     };
 }
 
@@ -158,6 +236,8 @@ QVariant EndpointStatisticsModel::data(const QModelIndex &index, int role) const
     const Bucket &bucket = m_rows.at(index.row());
     if (role == CountRole)
         return bucket.totals.packets;
+    if (role == KeyRole)
+        return bucket.key;
     if (role == IsMultipleRole) {
         switch (index.column()) {
         case 0: return bucket.identityAddress.isEmpty() && !bucket.addresses.empty() && bucket.addresses.counts.size() > 1;
@@ -207,6 +287,32 @@ void EndpointStatisticsModel::setGroup(int group)
         return;
     m_group = bounded;
     emit groupChanged();
+    // Sort state is per group (upstream sortByGroup).
+    emit sortChanged();
+    refreshView();
+}
+
+void EndpointStatisticsModel::setSearchText(const QString &text)
+{
+    if (m_searchText == text)
+        return;
+    m_searchText = text;
+    emit searchChanged();
+    refreshView();
+}
+
+void EndpointStatisticsModel::clickSort(int column)
+{
+    if (column < 0 || column >= kColumnCount)
+        return;
+    if (m_sortColumn[m_group] == column) {
+        m_sortAscending[m_group] = !m_sortAscending[m_group];
+    } else {
+        m_sortColumn[m_group] = column;
+        // AppKit sortDescriptorPrototype: numeric columns start descending.
+        m_sortAscending[m_group] = !isNumericColumn(column);
+    }
+    emit sortChanged();
     refreshView();
 }
 
@@ -330,6 +436,9 @@ void EndpointStatisticsModel::rebuild(QObject *packets)
         if (facts.protocolName.isEmpty())
             facts.protocolName = QStringLiteral("Unknown");
         facts.client = row.value(QStringLiteral("client")).toString();
+        // Apps group by the stable identity (executable path), matching the
+        // sidebar's app keys; the display name stays a related value.
+        facts.clientKey = row.value(QStringLiteral("clientKey")).toString();
         facts.domain = row.value(QStringLiteral("domain")).toString();
         facts.source.address = row.value(QStringLiteral("source")).toString();
         facts.source.port = row.value(QStringLiteral("sourcePort")).toString();
@@ -354,11 +463,13 @@ void EndpointStatisticsModel::rebuild(QObject *packets)
             remotePorts = {facts.source.port, facts.destination.port};
         }
 
-        if (!facts.client.isEmpty()) {
-            applyContribution(Group::Apps, facts.client, QString(), QString(),
+        // Apps group the client identity; two processes sharing a display
+        // name stay separate rows (upstream PacketSourceClientKey).
+        if (!facts.clientKey.isEmpty()) {
+            applyContribution(Group::Apps, facts.clientKey, QString(), QString(),
                 directionalTotals(facts.bytes, facts.direction, false),
                 remoteAddresses, remotePorts, {facts.protocolName},
-                {facts.client}, {facts.domain});
+                {facts.client.isEmpty() ? facts.clientKey : facts.client}, {facts.domain});
         }
         // Domains reverse the direction for their totals (upstream behavior).
         if (!facts.domain.isEmpty()) {
@@ -400,21 +511,240 @@ void EndpointStatisticsModel::rebuild(QObject *packets)
 
 void EndpointStatisticsModel::refreshView()
 {
-    // Busiest first (upstream default sort), key as stable tiebreaker.
+    // Search first (upstream presentation filter), then the group's sort.
     QVector<Bucket> rows;
-    for (const Bucket &bucket : m_buckets[m_group])
-        rows.append(bucket);
-    std::sort(rows.begin(), rows.end(), [](const Bucket &lhs, const Bucket &rhs) {
-        if (lhs.totals.bytes != rhs.totals.bytes)
-            return lhs.totals.bytes > rhs.totals.bytes;
-        return lhs.key < rhs.key;
-    });
+    rows.reserve(m_buckets[m_group].size());
+    for (const Bucket &bucket : m_buckets[m_group]) {
+        if (matchesSearch(bucket))
+            rows.append(bucket);
+    }
+    sortRows(rows);
 
     beginResetModel();
     m_rows = rows;
     endResetModel();
     refreshFooter();
     emit footerChanged();
+}
+
+// Whitespace-split terms, ALL contained in the joined identity fields
+// (upstream EndpointStatisticsTablePresenter).
+bool EndpointStatisticsModel::matchesSearch(const Bucket &bucket) const
+{
+    const QStringList terms = m_searchText.split(QRegularExpression(QStringLiteral("\\s+")),
+        Qt::SkipEmptyParts);
+    if (terms.isEmpty())
+        return true;
+    const QString searchable = QStringList {
+        bucket.key,
+        rawColumnValue(bucket, Address),
+        rawColumnValue(bucket, Port),
+        rawColumnValue(bucket, ProtocolName),
+        rawColumnValue(bucket, Client),
+        rawColumnValue(bucket, Domain),
+    }.join(QLatin1Char(' ')).toLower();
+    for (const QString &term : terms) {
+        if (!searchable.contains(term.toLower()))
+            return false;
+    }
+    return true;
+}
+
+void EndpointStatisticsModel::sortRows(QVector<Bucket> &rows) const
+{
+    const int column = m_sortColumn[m_group];
+    const bool ascending = m_sortAscending[m_group];
+    QCollator collator = QCollator(QLocale());
+    collator.setNumericMode(true);
+    collator.setCaseSensitivity(Qt::CaseInsensitive);
+    std::sort(rows.begin(), rows.end(),
+        [column, ascending, &collator](const Bucket &lhs, const Bucket &rhs) {
+            const int compared = compareColumn(lhs, rhs, column, collator);
+            if (compared == 0)
+                return collator.compare(lhs.key, rhs.key) < 0;
+            return ascending ? compared < 0 : compared > 0;
+        });
+}
+
+QString EndpointStatisticsModel::rawColumnValue(const Bucket &bucket, int column)
+{
+    switch (column) {
+    case Address:
+        return bucket.identityAddress.isEmpty()
+            ? bucket.addresses.displayValue(nullptr) : bucket.identityAddress;
+    case Port:
+        return bucket.identityPort.isEmpty()
+            ? bucket.ports.displayValue(nullptr) : bucket.identityPort;
+    case ProtocolName:
+        return bucket.protocols.displayValue(nullptr);
+    case Client:
+        return bucket.clients.displayValue(nullptr);
+    case Domain:
+        return bucket.domains.displayValue(nullptr);
+    case Packets:
+        return QString::number(bucket.totals.packets);
+    case Bytes:
+        return QString::number(bucket.totals.bytes);
+    case TxPackets:
+        return QString::number(bucket.totals.txPackets);
+    case TxBytes:
+        return QString::number(bucket.totals.txBytes);
+    case RxPackets:
+        return QString::number(bucket.totals.rxPackets);
+    case RxBytes:
+        return QString::number(bucket.totals.rxBytes);
+    case Summary:
+        return bucket.totals.summaryText();
+    default:
+        return QString();
+    }
+}
+
+bool EndpointStatisticsModel::isAggregateColumn(const Bucket &bucket, int column)
+{
+    switch (column) {
+    case Address:
+        return bucket.identityAddress.isEmpty() && !bucket.addresses.empty()
+            && bucket.addresses.counts.size() > 1;
+    case Port:
+        return bucket.identityPort.isEmpty() && bucket.ports.counts.size() > 1;
+    case ProtocolName:
+        return bucket.protocols.counts.size() > 1;
+    case Client:
+        return bucket.clients.counts.size() > 1;
+    case Domain:
+        return bucket.domains.counts.size() > 1;
+    default:
+        return false;
+    }
+}
+
+int EndpointStatisticsModel::compareColumn(const Bucket &lhs, const Bucket &rhs, int column,
+                                           const QCollator &collator)
+{
+    // Totals always exist, so numeric columns never hit the nil branch.
+    switch (column) {
+    case Packets: return compareQuantified(lhs.totals.packets, rhs.totals.packets);
+    case Bytes: return compareQuantified(lhs.totals.bytes, rhs.totals.bytes);
+    case TxPackets: return compareQuantified(lhs.totals.txPackets, rhs.totals.txPackets);
+    case TxBytes: return compareQuantified(lhs.totals.txBytes, rhs.totals.txBytes);
+    case RxPackets: return compareQuantified(lhs.totals.rxPackets, rhs.totals.rxPackets);
+    case RxBytes: return compareQuantified(lhs.totals.rxBytes, rhs.totals.rxBytes);
+    case Summary: {
+        // Tx byte share (upstream compareSummary).
+        const double lhsTotal = double(lhs.totals.txBytes) + double(lhs.totals.rxBytes)
+            + double(lhs.totals.unclassifiedBytes);
+        const double rhsTotal = double(rhs.totals.txBytes) + double(rhs.totals.rxBytes)
+            + double(rhs.totals.unclassifiedBytes);
+        const double lhsShare = lhsTotal == 0 ? 0 : double(lhs.totals.txBytes) / lhsTotal;
+        const double rhsShare = rhsTotal == 0 ? 0 : double(rhs.totals.txBytes) / rhsTotal;
+        return lhsShare < rhsShare ? -1 : (lhsShare > rhsShare ? 1 : 0);
+    }
+    case Port: {
+        // Ports sort numerically when both parse (upstream UInt64 branch).
+        bool lhsOk = false;
+        bool rhsOk = false;
+        const quint64 lhsPort = rawColumnValue(lhs, Port).toULongLong(&lhsOk);
+        const quint64 rhsPort = rawColumnValue(rhs, Port).toULongLong(&rhsOk);
+        if (lhsOk && rhsOk)
+            return compareQuantified(qint64(lhsPort), qint64(rhsPort));
+        [[fallthrough]];
+    }
+    default: {
+        // Text columns: empty values sort last; the collator keeps the
+        // Finder-like ordering of upstream localizedStandardCompare.
+        const QString lhsValue = rawColumnValue(lhs, column);
+        const QString rhsValue = rawColumnValue(rhs, column);
+        if (lhsValue.isEmpty() || rhsValue.isEmpty()) {
+            if (lhsValue.isEmpty() && !rhsValue.isEmpty())
+                return 1;
+            if (!lhsValue.isEmpty() && rhsValue.isEmpty())
+                return -1;
+            return 0;
+        }
+        return collator.compare(lhsValue, rhsValue) < 0 ? -1
+            : (collator.compare(lhsValue, rhsValue) > 0 ? 1 : 0);
+    }
+    }
+}
+
+QString EndpointStatisticsModel::columnTitle(int column)
+{
+    return column >= 0 && column < kColumnCount
+        ? QString::fromUtf8(kColumnTitles[column]) : QString();
+}
+
+QString EndpointStatisticsModel::columnJsonKey(int column)
+{
+    return column >= 0 && column < kColumnCount
+        ? QString::fromUtf8(kColumnJsonKeys[column]) : QString();
+}
+
+bool EndpointStatisticsModel::columnDefaultVisible(int column, int group)
+{
+    if (group < 0 || group >= GroupCount)
+        return true;
+    if (column == Address)
+        return group != Group::Apps && group != Group::Domains;
+    if (column == Port)
+        return group == Group::Tcp || group == Group::Udp;
+    return true;
+}
+
+int EndpointStatisticsModel::columnDefaultWidth(int column)
+{
+    switch (column) {
+    case Address: return 190;
+    case Port: return 72;
+    case ProtocolName: return 100;
+    case Client: return 150;
+    case Domain: return 190;
+    case Packets: case Bytes: return 98;
+    case TxPackets: case RxPackets: return 105;
+    case TxBytes: case RxBytes: return 100;
+    case Summary: return 190;
+    default: return 100;
+    }
+}
+
+QString EndpointStatisticsModel::keyAt(int row) const
+{
+    return row >= 0 && row < m_rows.size() ? m_rows.at(row).key : QString();
+}
+
+QVariantMap EndpointStatisticsModel::rawRow(const QString &key) const
+{
+    QVariantMap map;
+    const auto it = m_buckets[m_group].constFind(key);
+    if (it == m_buckets[m_group].constEnd())
+        return map;
+    const Bucket &bucket = it.value();
+    QVariantList multiple;
+    for (int column = 0; column < kColumnCount; ++column) {
+        map.insert(QString::fromUtf8(kColumnJsonKeys[column]), rawColumnValue(bucket, column));
+        multiple.append(isAggregateColumn(bucket, column));
+    }
+    map.insert(QStringLiteral("multiple"), multiple);
+    map.insert(QStringLiteral("valid"), true);
+    return map;
+}
+
+QString EndpointStatisticsModel::joinedValues(const QStringList &keys, int field) const
+{
+    const int column = field == 0 ? Address : (field == 1 ? Domain : Client);
+    QStringList values;
+    QSet<QString> seen;
+    for (const QString &key : keys) {
+        const auto it = m_buckets[m_group].constFind(key);
+        if (it == m_buckets[m_group].constEnd())
+            continue;
+        const QString value = rawColumnValue(it.value(), column);
+        if (value.isEmpty() || isAggregateColumn(it.value(), column) || seen.contains(value))
+            continue;
+        seen.insert(value);
+        values << value;
+    }
+    return values.join(QLatin1Char('\n'));
 }
 
 void EndpointStatisticsModel::refreshFooter()
@@ -436,4 +766,119 @@ void EndpointStatisticsModel::refreshFooter()
     if (m_scopeTotals.unclassifiedBytes > 0)
         parts << QStringLiteral("Unclassified %1").arg(humanizeBytes(m_scopeTotals.unclassifiedBytes));
     m_footerText = parts.join(QStringLiteral(" · "));
+}
+
+// Visible-column exports (upstream EndpointStatisticsTableExportFormatter):
+// CSV with formula-protected fields and CRLF rows, pretty JSON with the
+// snake_case wire keys.
+QString EndpointStatisticsModel::rowsAsCsv(const QStringList &keys, const QVariantList &columns) const
+{
+    const QVector<int> cols = validatedColumns(columns);
+    if (cols.isEmpty())
+        return QString();
+    QStringList lines;
+    QStringList header;
+    for (const int column : cols)
+        header << csvField(QString::fromUtf8(kColumnTitles[column]), false);
+    lines << header.join(QLatin1Char(','));
+    for (const QString &key : keys) {
+        const auto it = m_buckets[m_group].constFind(key);
+        if (it == m_buckets[m_group].constEnd())
+            continue;
+        QStringList fields;
+        for (const int column : cols)
+            fields << csvField(rawColumnValue(it.value(), column), !isNumericColumn(column));
+        lines << fields.join(QLatin1Char(','));
+    }
+    return lines.join(QStringLiteral("\r\n"));
+}
+
+QString EndpointStatisticsModel::rowsAsJson(const QStringList &keys, const QVariantList &columns) const
+{
+    const QVector<int> cols = validatedColumns(columns);
+    if (keys.isEmpty())
+        return QStringLiteral("[]");
+    QString result = QStringLiteral("[\n");
+    bool firstRow = true;
+    for (const QString &key : keys) {
+        const auto it = m_buckets[m_group].constFind(key);
+        if (it == m_buckets[m_group].constEnd())
+            continue;
+        if (!firstRow)
+            result += QStringLiteral(",\n");
+        firstRow = false;
+        if (cols.isEmpty()) {
+            result += QStringLiteral("  {}");
+            continue;
+        }
+        result += QStringLiteral("  {\n");
+        for (int index = 0; index < cols.size(); ++index) {
+            if (index > 0)
+                result += QStringLiteral(",\n");
+            const int column = cols.at(index);
+            result += QStringLiteral("    \"%1\": %2").arg(QString::fromUtf8(kColumnJsonKeys[column]),
+                isNumericColumn(column) ? rawColumnValue(it.value(), column)
+                                        : jsonString(rawColumnValue(it.value(), column)));
+        }
+        result += QStringLiteral("\n  }");
+    }
+    result += QStringLiteral("\n]");
+    return result;
+}
+
+QVector<int> EndpointStatisticsModel::validatedColumns(const QVariantList &columns)
+{
+    QVector<int> cols;
+    for (const QVariant &value : columns) {
+        const int column = value.toInt();
+        if (column >= 0 && column < kColumnCount)
+            cols << column;
+    }
+    return cols;
+}
+
+// Scope for Show Related Packets: the closest sidebar node, or the All
+// Packets scope plus an exact display filter for transport rows.
+QVariantMap EndpointStatisticsModel::relatedScope(const QString &key) const
+{
+    QVariantMap scope;
+    const auto it = m_buckets[m_group].constFind(key);
+    if (it == m_buckets[m_group].constEnd())
+        return scope;
+    const Bucket &bucket = it.value();
+    switch (m_group) {
+    case Group::Apps:
+        // The Apps key IS the sidebar's app key (stable client identity).
+        scope.insert(QStringLiteral("nodeId"), QStringLiteral("app:") + key);
+        break;
+    case Group::Domains:
+        scope.insert(QStringLiteral("nodeId"),
+            QStringLiteral("domain:") + normalizedPacketDomain(key));
+        break;
+    case Group::Ipv4:
+    case Group::Ipv6:
+        scope.insert(QStringLiteral("nodeId"),
+            QStringLiteral("ip:") + normalizedPacketIP(key));
+        break;
+    case Group::Tcp:
+    case Group::Udp: {
+        scope.insert(QStringLiteral("nodeId"), QStringLiteral("all"));
+        bool portOk = false;
+        const int port = bucket.identityPort.toInt(&portOk);
+        const int addressGroup = groupIndexForCanonical(bucket.identityAddress);
+        if (!portOk || port <= 0 || (addressGroup != Group::Ipv4 && addressGroup != Group::Ipv6))
+            break;
+        const QString ipField = addressGroup == Group::Ipv6
+            ? QStringLiteral("ipv6.addr") : QStringLiteral("ip.addr");
+        const QString transport = m_group == Group::Tcp
+            ? QStringLiteral("tcp.port") : QStringLiteral("udp.port");
+        scope.insert(QStringLiteral("filter"),
+            QStringLiteral("%1 == %2 && %3 == %4").arg(ipField, bucket.identityAddress,
+                transport, QString::number(port)));
+        break;
+    }
+    default:
+        break;
+    }
+    return scope;
 }

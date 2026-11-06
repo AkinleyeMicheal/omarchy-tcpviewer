@@ -1144,6 +1144,8 @@ ApplicationWindow {
     // Follow Stream -------------------------------------------------------------
     FollowSessionController {
         id: follow
+        // Stream catalog for the window's stepper.
+        packets: session.packets
     }
 
     // Copy row/cell formats (upstream PacketTableCopyFormatter).
@@ -1258,8 +1260,12 @@ ApplicationWindow {
         }
 
         MenuItem {
-            text: rowContextMenu.pendingProtocol.indexOf("TCP") >= 0
-                ? "Follow TCP Stream" : "Follow UDP Stream"
+            // Upstream 1.16: DNS traffic follows its underlying TCP/UDP
+            // stream; DNS rows surface the DNS label.
+            text: rowContextMenu.pendingProtocol.indexOf("DNS") >= 0
+                ? "Follow DNS Stream"
+                : (rowContextMenu.pendingProtocol.indexOf("TCP") >= 0
+                    ? "Follow TCP Stream" : "Follow UDP Stream")
             enabled: !session.savedMode
             onTriggered: follow.follow(String(session.packets.packetIDAt(rowContextMenu.pendingRow)))
         }
@@ -1512,6 +1518,14 @@ ApplicationWindow {
         visible: false
         stats: endpointStats
         session: session
+        // Show Related Packets lands on the packets view of the main window
+        // (upstream workspaceMode = .packets + activateForNavigation).
+        onRelatedRequested: {
+            window.captureMode = "packets"
+            window.show()
+            window.raise()
+            window.requestActivate()
+        }
     }
 
     Component.onCompleted: {

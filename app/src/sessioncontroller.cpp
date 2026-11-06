@@ -4,6 +4,7 @@
 #include <QDateTime>
 #include <QFile>
 #include <QGuiApplication>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSet>
@@ -2215,6 +2216,42 @@ QVariantList SessionController::overviewCards() const
             result.append(name);
     }
     return result;
+}
+
+// Endpoint window per-group column layouts (upstream keeps one column store
+// per endpoint group) as a JSON object: {"0".."5" → {visible, widths}}.
+QVariantMap SessionController::endpointColumnLayout() const
+{
+    QSettings settings;
+    const QJsonDocument document = QJsonDocument::fromJson(
+        settings.value(QStringLiteral("endpoints/columnLayout")).toString().toUtf8());
+    return document.object().toVariantMap();
+}
+
+void SessionController::setEndpointColumnLayout(const QVariantMap &layout)
+{
+    // Bounded: six groups of twelve booleans + widths, no free-form keys.
+    QJsonObject root;
+    for (int group = 0; group < 6; ++group) {
+        const QVariantMap entry = layout.value(QString::number(group)).toMap();
+        const QVariantList visible = entry.value(QStringLiteral("visible")).toList();
+        const QVariantList widths = entry.value(QStringLiteral("widths")).toList();
+        if (visible.size() != 12 || widths.size() != 12)
+            continue;
+        QJsonArray visibleArray;
+        QJsonArray widthArray;
+        for (int column = 0; column < 12; ++column) {
+            visibleArray.append(visible.at(column).toBool());
+            widthArray.append(qBound(40, widths.at(column).toInt(), 1200));
+        }
+        root.insert(QString::number(group), QJsonObject{
+            {QStringLiteral("visible"), visibleArray},
+            {QStringLiteral("widths"), widthArray},
+        });
+    }
+    QSettings settings;
+    settings.setValue(QStringLiteral("endpoints/columnLayout"),
+                      QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)));
 }
 
 void SessionController::setOverviewCards(const QVariantList &cards)

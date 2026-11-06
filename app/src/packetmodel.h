@@ -123,6 +123,8 @@ public:
     // instantiate one column per row.
     Q_INVOKABLE void setColumnCount(int count);
     Q_INVOKABLE QString packetIDAt(int row) const;
+    // Wire stream id ("tcp:3") of the visible row; empty for non-stream rows.
+    Q_INVOKABLE QString streamIdAt(int row) const;
     Q_INVOKABLE int rowForPacketID(const QString &packetID) const;
     Q_INVOKABLE int numberAt(int row) const;
     Q_INVOKABLE QString summaryAt(int row) const;

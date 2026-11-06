@@ -140,6 +140,15 @@ if(TCPVIEWER_BUILD_TESTS)
     target_link_libraries(sourcetreemodel_test PRIVATE Qt6::Test Qt6::Qml)
     add_test(NAME sourcetreemodel COMMAND sourcetreemodel_test)
 
+    qt_add_executable(endpointstatsmodel_test
+        tests/endpointstatsmodel_test.cpp
+        src/endpointstatsmodel.cpp
+        src/packetmodel.cpp
+    )
+    target_include_directories(endpointstatsmodel_test PRIVATE src)
+    target_link_libraries(endpointstatsmodel_test PRIVATE Qt6::Test Qt6::Qml)
+    add_test(NAME endpointstatsmodel COMMAND endpointstatsmodel_test)
+
     qt_add_executable(annotationsstores_test
         tests/annotationsstores_test.cpp
         src/packetmodel.cpp

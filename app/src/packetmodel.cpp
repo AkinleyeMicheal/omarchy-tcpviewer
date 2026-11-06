@@ -377,6 +377,16 @@ QString PacketListModel::packetIDAt(int row) const
     return QString::number(m_rows.at(source).number);
 }
 
+// Stream catalog for the Follow window's stepper (C++ side reads it to build
+// the ordered stream list of the current capture).
+QString PacketListModel::streamIdAt(int row) const
+{
+    const int source = sourceRow(row);
+    if (source < 0)
+        return {};
+    return m_rows.at(source).streamId;
+}
+
 int PacketListModel::rowForPacketID(const QString &packetID) const
 {
     const quint64 id = packetID.toULongLong();
@@ -545,6 +555,9 @@ QVariantList PacketListModel::snapshotRows() const
         map.insert(QStringLiteral("destinationPort"), row.destinationPort);
         map.insert(QStringLiteral("protocol"), row.protocol);
         map.insert(QStringLiteral("client"), row.client);
+        // Apps grouping and the endpoint stats' Show Related Packets need the
+        // stable identity, matching the sidebar's app keys.
+        map.insert(QStringLiteral("clientKey"), row.clientKey);
         map.insert(QStringLiteral("domain"), row.domain);
         map.insert(QStringLiteral("direction"), row.direction);
         snapshot.append(map);

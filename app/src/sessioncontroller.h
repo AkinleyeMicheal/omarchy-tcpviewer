@@ -264,6 +264,10 @@ public:
     // Overview card picker persistence (upstream TCPViewer.overview.cards).
     Q_INVOKABLE QVariantList overviewCards() const;
     Q_INVOKABLE void setOverviewCards(const QVariantList &cards);
+    // Endpoint window per-group column layouts (upstream per-group column
+    // stores) as a JSON object: {"0".."5" → {visible, widths}}.
+    Q_INVOKABLE QVariantMap endpointColumnLayout() const;
+    Q_INVOKABLE void setEndpointColumnLayout(const QVariantMap &layout);
 
 signals:
     void interfacesChanged();
