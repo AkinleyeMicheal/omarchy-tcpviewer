@@ -302,7 +302,7 @@ Window {
 
         MenuItem {
             text: qsTr("Copy Cell")
-            enabled: rowMenu.pendingRow.valid
+            enabled: rowMenu.pendingRow.valid === true
                 && rowMenu.pendingColumn >= 0
                 && !rowMenu.pendingRow.multiple[rowMenu.pendingColumn]
                 && String(rowMenu.pendingRow[window.stats.columnJsonKey(rowMenu.pendingColumn)] ?? "") !== ""

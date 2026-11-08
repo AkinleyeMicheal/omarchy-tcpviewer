@@ -32,6 +32,8 @@ class SessionController : public QObject
     // Test hooks for launch behavior (tab count, split panes).
     Q_PROPERTY(bool startupSplit READ startupSplit CONSTANT)
     Q_PROPERTY(int startupTabs READ startupTabs CONSTANT)
+    Q_PROPERTY(int startupSelectTab READ startupSelectTab CONSTANT)
+    Q_PROPERTY(QString startupTabScript READ startupTabScript CONSTANT)
     Q_PROPERTY(QVariantList interfaces READ interfaces NOTIFY interfacesChanged)
     Q_PROPERTY(QVariantList sources READ sources NOTIFY sourcesChanged)
     Q_PROPERTY(QVariantMap status READ status NOTIFY statusChanged)
@@ -107,6 +109,16 @@ public:
         const int value = qEnvironmentVariableIntValue("TCPVIEWER_TABS");
         return value > 0 ? qBound(1, value, 8) : 1;
     }
+    // CI hook: switch to a seeded tab after startup (TCPVIEWER_SELECT_TAB).
+    int startupSelectTab() const
+    {
+        const int value = qEnvironmentVariableIntValue("TCPVIEWER_SELECT_TAB");
+        return value > 0 ? value : -1;
+    }
+    // CI hook: scripted tab ops, ';'-separated tokens (TCPVIEWER_TAB_SCRIPT):
+    // "new" adds a tab, "sel=k" switches, "filter=text" applies a display
+    // filter, "mode=packets|overview" sets the workspace view.
+    QString startupTabScript() const { return qEnvironmentVariable("TCPVIEWER_TAB_SCRIPT"); }
     bool startupStatistics() const { return qEnvironmentVariableIsSet("TCPVIEWER_OPEN_STATS"); }
     // CI hook: comma-separated packet IDs to compare (TCPVIEWER_DIFF_PACKETS).
     QString startupDiffPackets() const { return qEnvironmentVariable("TCPVIEWER_DIFF_PACKETS"); }

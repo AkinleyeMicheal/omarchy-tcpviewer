@@ -206,6 +206,24 @@ page header.
 - Right-clicking a protocol-detail row in the inspector offers
   **Create Column**, adding a bounded table column backed by that field.
 
+## Workspace tabs
+
+- `Ctrl+T` opens a new tab, `Ctrl+W` closes the active one (closing the last
+  tab closes the window, as upstream does). The tab bar appears from two
+  tabs on and offers drag reorder, a `+` button, and a right-click menu with
+  **Close Tab**, **Close Other Tabs** (also Alt-click on the ×) and
+  **Close Tabs to the Right**. `Ctrl+Tab` / `Ctrl+Shift+Tab` cycle and
+  `Ctrl+Shift+1…9` jump to the nth tab; `Ctrl+[` / `Ctrl+]` walk a
+  Back/Forward visit history kept separately from the tab order.
+- Each tab keeps its own source selection, sidebar tree scope, display
+  filter, quick-filter chips, selected packet, split state, and
+  Packets/Overview view. Live tabs share one capture — starting, pausing or
+  clearing it reaches every tab showing it, like upstream.
+- Right-clicking an app, domain, or IP row in the sidebar offers
+  **Open in New Tab**, scoping the new tab to that node. `File ▸ Open…`
+  imports captures into a new offline tab named after the file, leaving the
+  current workspace untouched.
+
 ## Live capture
 
 - **Interfaces** — the picker lists every capturable device, first among them
