@@ -19,50 +19,37 @@ ApplicationWindow {
     property bool inspectorVisible: true
     property string inspectorPlacement: "trailing"
     // Workspace mode (upstream NetworkInspectorWorkspaceMode): "packets" or
-    // "overview". TCPVIEWER_CAPTURE_MODE seeds it for CI/screenshot runs; the
-    // seed arrives in onCompleted because sibling ids are not ready before.
-    property string captureMode: "packets"
+    // "overview". TCPVIEWER_CAPTURE_MODE seeds it for CI/screenshot runs.
+    // Workspace tabs (upstream tab mode) live in WorkspaceTabsController:
+    // each tab owns its source selection, tree scope, filters, selected
+    // packet, split, and view mode; the window binds the active tab's mode.
+    readonly property string captureMode: tabs.activeCaptureMode
 
-    // Workspace tabs + split panes (upstream tab mode): each tab owns its
-    // source selection, tree scope, filters, selected packet, split, and
-    // Packets/Overview view; live tabs share one capture. Tab ids are stable
-    // across reordering (CLI/MCP targeting in later phases). A ListModel so
-    // Repeater delegates (live panes) survive close/reorder incrementally.
-    ListModel {
-        id: tabsModel
+    function setCaptureMode(mode) {
+        tabs.setActiveCaptureMode(mode)
     }
-    property int activeTab: 0
-    property int nextTabNumber: 1
+
     // Focused workspace routes inspector fetches (per-pane selection state).
     property string focusedPaneID: "0:0"
-    // Back/Forward visit history, separate from left-to-right order.
-    property var tabHistory: []
-    property int tabHistoryCursor: -1
-    // Per-tab quick-filter chips, keyed by the stable tab id (ListModel list
-    // roles can't be inferred from the empty seed array).
-    property var tabQuickFilters: ({})
-    // Selection (+ tree scope) deferred until the switched source's rows land.
-    property var pendingTabRestore: null
-    property int pendingTabRestoreTries: 0
 
     Action { id: openpcapAction; shortcut: "Ctrl+O"; onTriggered: openDialog.open() }
     Action { id: newTabAction; shortcut: "Ctrl+T"; onTriggered: window.newTab() }
-    Action { id: closeTabAction; shortcut: "Ctrl+W"; onTriggered: window.closeTab(window.activeTab) }
+    Action { id: closeTabAction; shortcut: "Ctrl+W"; onTriggered: window.closeActiveTab() }
     // Upstream tab switching: Ctrl+Tab / Ctrl+Shift+Tab cycle, Ctrl+[ / Ctrl+]
     // walk the Back/Forward history, Ctrl+Shift+1..9 select the nth tab.
-    Action { id: nextTabAction; shortcut: "Ctrl+Tab"; onTriggered: window.selectNextTab(1) }
-    Action { id: previousTabAction; shortcut: "Ctrl+Shift+Tab"; onTriggered: window.selectNextTab(-1) }
-    Action { id: tabBackAction; shortcut: "Ctrl+["; onTriggered: window.tabHistoryStep(-1) }
-    Action { id: tabForwardAction; shortcut: "Ctrl+]"; onTriggered: window.tabHistoryStep(1) }
-    Action { id: tab1Action; shortcut: "Ctrl+Shift+1"; onTriggered: window.selectTab(0) }
-    Action { id: tab2Action; shortcut: "Ctrl+Shift+2"; onTriggered: window.selectTab(1) }
-    Action { id: tab3Action; shortcut: "Ctrl+Shift+3"; onTriggered: window.selectTab(2) }
-    Action { id: tab4Action; shortcut: "Ctrl+Shift+4"; onTriggered: window.selectTab(3) }
-    Action { id: tab5Action; shortcut: "Ctrl+Shift+5"; onTriggered: window.selectTab(4) }
-    Action { id: tab6Action; shortcut: "Ctrl+Shift+6"; onTriggered: window.selectTab(5) }
-    Action { id: tab7Action; shortcut: "Ctrl+Shift+7"; onTriggered: window.selectTab(6) }
-    Action { id: tab8Action; shortcut: "Ctrl+Shift+8"; onTriggered: window.selectTab(7) }
-    Action { id: tab9Action; shortcut: "Ctrl+Shift+9"; onTriggered: window.selectTab(8) }
+    Action { id: nextTabAction; shortcut: "Ctrl+Tab"; onTriggered: tabs.selectNextTab(1) }
+    Action { id: previousTabAction; shortcut: "Ctrl+Shift+Tab"; onTriggered: tabs.selectNextTab(-1) }
+    Action { id: tabBackAction; shortcut: "Ctrl+["; onTriggered: tabs.historyStep(-1) }
+    Action { id: tabForwardAction; shortcut: "Ctrl+]"; onTriggered: tabs.historyStep(1) }
+    Action { id: tab1Action; shortcut: "Ctrl+Shift+1"; onTriggered: tabs.selectTab(0) }
+    Action { id: tab2Action; shortcut: "Ctrl+Shift+2"; onTriggered: tabs.selectTab(1) }
+    Action { id: tab3Action; shortcut: "Ctrl+Shift+3"; onTriggered: tabs.selectTab(2) }
+    Action { id: tab4Action; shortcut: "Ctrl+Shift+4"; onTriggered: tabs.selectTab(3) }
+    Action { id: tab5Action; shortcut: "Ctrl+Shift+5"; onTriggered: tabs.selectTab(4) }
+    Action { id: tab6Action; shortcut: "Ctrl+Shift+6"; onTriggered: tabs.selectTab(5) }
+    Action { id: tab7Action; shortcut: "Ctrl+Shift+7"; onTriggered: tabs.selectTab(6) }
+    Action { id: tab8Action; shortcut: "Ctrl+Shift+8"; onTriggered: tabs.selectTab(7) }
+    Action { id: tab9Action; shortcut: "Ctrl+Shift+9"; onTriggered: tabs.selectTab(8) }
     Action { id: quitAction; shortcut: "Ctrl+Q"; onTriggered: Qt.quit() }
     Action { id: focusFilterAction; shortcut: "Ctrl+F"; onTriggered: window.focusDisplayFilter() }
     Action { id: focusInspectorFilterAction; shortcut: "Ctrl+Alt+F"; onTriggered: window.focusInspectorFilter() }
@@ -234,219 +221,73 @@ ApplicationWindow {
     function toggleInspector() { inspectorVisible = !inspectorVisible }
     function toggleSplitView() { toggleSplit() }
 
-    function makeTabState(splitVisible) {
-        const number = window.nextTabNumber++
-        return {
-            id: "tab-" + number,
-            label: "Capture " + number,
-            splitVisible: splitVisible === true,
-            sourceID: session.currentSourceID,
-            treeFilter: session.sourceTree.selectedNodeId,
-            filterText: session.filterText,
-            selectedPacketID: "",
-            captureMode: window.captureMode,
-        }
+    // The pane routing keyboard/table-scoped actions (focusedPaneID).
+    function focusedPane() {
+        var tab = tabsRepeater.itemAt(tabs.activeTab)
+        if (!tab)
+            return null
+        if (window.focusedPaneID.endsWith(":1") && tab.secondPane.visible)
+            return tab.secondPane
+        return tab.firstPane
     }
 
-    // Write the shared workspace state into the active tab's entry.
-    function snapshotActiveTab() {
-        if (window.activeTab < 0 || window.activeTab >= tabsModel.count)
-            return
-        const tabID = tabsModel.get(window.activeTab).id
-        tabsModel.setProperty(window.activeTab, "sourceID", session.currentSourceID)
-        tabsModel.setProperty(window.activeTab, "treeFilter", session.sourceTree.selectedNodeId)
-        tabsModel.setProperty(window.activeTab, "filterText", session.filterText)
-        window.tabQuickFilters[tabID] = session.quickFilters
-        tabsModel.setProperty(window.activeTab, "selectedPacketID", session.selectedPacketID)
-        tabsModel.setProperty(window.activeTab, "captureMode", window.captureMode)
-    }
-
-    // Push a visit into the Back/Forward history (truncates the forward tail,
-    // bounded like a browser's).
-    function pushTabHistory(tabID) {
-        if (window.tabHistoryCursor >= 0
-            && window.tabHistory[window.tabHistoryCursor] === tabID)
-            return
-        var trail = window.tabHistory.slice(0, window.tabHistoryCursor + 1)
-        trail.push(tabID)
-        while (trail.length > 100)
-            trail.shift()
-        window.tabHistory = trail
-        window.tabHistoryCursor = trail.length - 1
+    function packetTargetRows() {
+        const pane = window.focusedPane()
+        const rows = pane ? pane.table.selectedRows : []
+        if (rows.length > 0)
+            return rows
+        if (session.selectedPacketID === "")
+            return []
+        const row = session.packets.rowForPacketID(session.selectedPacketID)
+        return row >= 0 ? [row] : []
     }
 
     function restoreSelection(packetID) {
         if (packetID === "")
             return
-        var tab = tabsRepeater.itemAt(window.activeTab)
+        const target = tabs.activeTab
+        var tab = tabsRepeater.itemAt(target)
         if (tab)
             tab.revealPacket(packetID)
     }
 
-    function indexOfTabID(tabID) {
-        for (let i = 0; i < tabsModel.count; ++i) {
-            if (tabsModel.get(i).id === tabID)
-                return i
-        }
-        return -1
-    }
-
-    // Apply a tab's saved state to the shared workspace (upstream: switching
-    // tabs returns you to that tab's view).
-    function applyTabState(state) {
-        var tab = tabsRepeater.itemAt(window.activeTab)
-        if (tab)
-            tab.splitVisible = state.splitVisible
-        window.captureMode = state.captureMode
-        if (state.sourceID !== "" && state.sourceID !== session.currentSourceID) {
-            // The tree scope and selection restore once the source's rows
-            // and tree have loaded.
-            window.pendingTabRestoreTries = 0
-            window.pendingTabRestore = state
-            session.selectSource(state.sourceID)
-        } else {
-            const target = state.treeFilter === "" ? "all" : state.treeFilter
-            if (session.sourceTree.selectedNodeId !== target)
-                session.selectTreeFilter(target)
-            window.restoreSelection(state.selectedPacketID)
-        }
-        // Filters are source-sticky; each tab re-applies its own set.
-        session.applyFilter(state.filterText)
-        session.setQuickFilters(window.tabQuickFilters[state.id] || [])
-    }
-
-    function selectTab(index) {
-        if (index < 0 || index >= tabsModel.count || index === window.activeTab)
-            return
-        window.snapshotActiveTab()
-        window.activeTab = index
-        window.applyTabState(tabsModel.get(index))
-        window.pushTabHistory(tabsModel.get(index).id)
-    }
-
-    // Create a tab seeded from the shared workspace (upstream ⌘T shows the
-    // window's live capture); the customizer adjusts the entry pre-append.
-    function createTab(customizer) {
-        const state = window.makeTabState(false)
-        if (customizer)
-            customizer(state)
-        window.snapshotActiveTab()
-        tabsModel.append(state)
-        window.activeTab = tabsModel.count - 1
-        window.applyTabState(tabsModel.get(window.activeTab))
-        window.pushTabHistory(state.id)
-        window.focusedPaneID = window.activeTab + ":0"
-    }
-
     function newTab() {
-        window.createTab(null)
+        tabs.newTab()
+        window.focusedPaneID = tabs.activeTab + ":0"
     }
 
-    // Sidebar rows offer Open in New Tab (upstream scopes the new tab to the
-    // app/domain/IP node).
+    function closeActiveTab() {
+        if (!tabs.closeTab(tabs.activeTab))
+            window.close()
+    }
+
+    // Close a specific tab; closing the last tab closes the window
+    // (upstream's behavior).
+    function closeActiveTabAt(index) {
+        if (!tabs.closeTab(index))
+            window.close()
+    }
+
+    // Sidebar rows: scope the new tab to the clicked node.
     function openSourceInNewTab(nodeID) {
-        if (nodeID === "")
-            return
-        window.createTab(function (state) { state.treeFilter = String(nodeID) })
+        tabs.openSourceInNewTab(String(nodeID))
+        window.focusedPaneID = tabs.activeTab + ":0"
     }
 
     // File imports land in a fresh offline tab, keeping the current view
     // (upstream's Open in New Tab default); the tab is named after the file.
     function importIntoNewTab(files) {
-        window.createTab(function (state) {
-            state.sourceID = ""
-            state.filterText = ""
-            if (files.length > 0) {
-                const base = window.fileDialogPath(files[0]).split("/").pop()
-                state.label = files.length > 1 ? base + " +" + (files.length - 1) : base
-            }
-        })
-        session.importFiles(files)
-    }
-
-    function closeTab(index) {
-        if (index < 0 || index >= tabsModel.count)
-            return
-        if (tabsModel.count === 1) {
-            // Upstream: closing the last tab closes the window (and its live
-            // capture).
-            window.close()
-            return
+        var label = ""
+        if (files.length > 0) {
+            const base = window.fileDialogPath(files[0]).split("/").pop()
+            label = files.length > 1 ? base + " +" + (files.length - 1) : base
         }
-        const closedID = tabsModel.get(index).id
-        tabsModel.remove(index)
-        // Drop the closed tab from the visit history.
-        window.tabHistory = window.tabHistory.filter(function (id) { return id !== closedID })
-        window.tabHistoryCursor = Math.min(window.tabHistoryCursor, window.tabHistory.length - 1)
-        if (window.activeTab >= tabsModel.count)
-            window.activeTab = tabsModel.count - 1
-        window.focusedPaneID = window.activeTab + ":0"
-        // Re-apply whatever tab is now active (the shared state still shows
-        // the closed tab's filters when it was the active one).
-        window.applyTabState(tabsModel.get(window.activeTab))
-    }
-
-    function closeOtherTabs(index) {
-        if (index < 0 || index >= tabsModel.count)
-            return
-        window.snapshotActiveTab()
-        const keeper = tabsModel.get(index)
-        const keptID = keeper.id
-        tabsModel.clear()
-        tabsModel.append(keeper)
-        window.activeTab = 0
-        window.tabHistory = [keptID]
-        window.tabHistoryCursor = 0
-        window.focusedPaneID = "0:0"
-        window.applyTabState(tabsModel.get(0))
-    }
-
-    function closeTabsToRight(index) {
-        if (index < 0 || index >= tabsModel.count - 1)
-            return
-        window.snapshotActiveTab()
-        while (tabsModel.count > index + 1)
-            tabsModel.remove(tabsModel.count - 1)
-        if (window.activeTab > index)
-            window.activeTab = index
-        window.focusedPaneID = window.activeTab + ":0"
-    }
-
-    // Drag reorder: move a tab to a zero-based index (upstream tabs move).
-    function moveTab(from, to) {
-        if (from === to || from < 0 || to < 0
-            || from >= tabsModel.count || to >= tabsModel.count)
-            return
-        tabsModel.move(from, to, 1)
-        window.activeTab = to
-        window.focusedPaneID = to + ":0"
-    }
-
-    function selectNextTab(delta) {
-        const count = tabsModel.count
-        if (count < 2)
-            return
-        window.selectTab((window.activeTab + delta + count) % count)
-    }
-
-    // View ▸ Back/Forward revisits tabs in selection order (upstream ⌘[ / ⌘]).
-    function tabHistoryStep(delta) {
-        const cursor = window.tabHistoryCursor + delta
-        if (cursor < 0 || cursor >= window.tabHistory.length)
-            return
-        const index = window.indexOfTabID(window.tabHistory[cursor])
-        if (index < 0 || index === window.activeTab)
-            return
-        window.snapshotActiveTab()
-        window.activeTab = index
-        window.applyTabState(tabsModel.get(index))
-        window.tabHistoryCursor = cursor
+        tabs.importIntoNewTab(files, label)
+        window.focusedPaneID = tabs.activeTab + ":0"
     }
 
     function toggleSplit() {
-        var tab = tabsRepeater.itemAt(activeTab)
-        if (tab)
-            tab.splitVisible = !tab.splitVisible
+        tabs.toggleSplit()
     }
 
     SessionController {
@@ -454,28 +295,22 @@ ApplicationWindow {
         Component.onCompleted: start()
     }
 
-    // Deferred per-tab restore: after a tab switch changes the source, rows
-    // and the source tree land asynchronously; the saved tree scope applies
-    // once its node exists, then the saved packet selection (bounded retries
-    // so a vanished node or a live-appending source can't spin forever).
+    // Workspace tab state (per-tab source/scope/filter/selection/mode).
+    WorkspaceTabsController {
+        id: tabs
+        session: session
+    }
+
+    // QML-side routing: saved selections re-reveal in the focused pane (the
+    // inspector fetch targets the pane state), and tab switches align the
+    // focused workspace.
     Connections {
-        target: session.packets
-        function onRevisionChanged() {
-            if (window.pendingTabRestore === null)
-                return
-            if (window.pendingTabRestoreTries++ > 40) {
-                window.pendingTabRestore = null
-                return
-            }
-            const state = window.pendingTabRestore
-            const target = state.treeFilter === "" ? "all" : state.treeFilter
-            if (session.sourceTree.selectedNodeId !== target) {
-                session.selectTreeFilter(target)
-                if (session.sourceTree.selectedNodeId !== target)
-                    return
-            }
-            window.pendingTabRestore = null
-            window.restoreSelection(state.selectedPacketID)
+        target: tabs
+        function onRestoreSelectionRequested(packetID) {
+            window.restoreSelection(packetID)
+        }
+        function onActiveTabChanged(index) {
+            window.focusedPaneID = index + ":0"
         }
     }
 
@@ -908,7 +743,7 @@ ApplicationWindow {
         anchors.top: toolbar.bottom
         anchors.left: parent.left
         anchors.right: parent.right
-        height: tabsModel.count > 1 ? 30 : 0
+        height: tabs.count > 1 ? 30 : 0
         visible: height > 0
         color: Theme.headerBackground
 
@@ -919,14 +754,14 @@ ApplicationWindow {
             spacing: 4
 
             Repeater {
-                model: tabsModel
+                model: tabs
 
                 delegate: Rectangle {
                     id: tabDelegate
                     required property int index
                     required property string label
 
-                    readonly property bool active: window.activeTab === index
+                    readonly property bool active: tabs.activeTab === index
 
                     width: 168
                     height: 22
@@ -964,9 +799,9 @@ ApplicationWindow {
                             // Alt-click closes the other tabs (upstream).
                             onClicked: (mouse) => {
                                 if (mouse.modifiers & Qt.AltModifier)
-                                    window.closeOtherTabs(tabDelegate.index)
+                                    tabs.closeOtherTabs(tabDelegate.index)
                                 else
-                                    window.closeTab(tabDelegate.index)
+                                    window.closeActiveTabAt(tabDelegate.index)
                             }
                         }
                     }
@@ -995,9 +830,9 @@ ApplicationWindow {
                             const slot = 172
                             const globalX = tabDelegate.mapToItem(tabStripRow, 0, 0).x + mouse.x
                             let target = Math.floor(globalX / slot)
-                            target = Math.max(0, Math.min(tabsModel.count - 1, target))
+                            target = Math.max(0, Math.min(tabs.count - 1, target))
                             if (target !== tabDelegate.index)
-                                window.moveTab(tabDelegate.index, target)
+                                tabs.moveTab(tabDelegate.index, target)
                         }
                         onClicked: (mouse) => {
                             if (mouse.button === Qt.RightButton) {
@@ -1005,7 +840,7 @@ ApplicationWindow {
                                 tabContextMenu.popup()
                                 return
                             }
-                            window.selectTab(tabDelegate.index)
+                            tabs.selectTab(tabDelegate.index)
                         }
                     }
                 }
@@ -1026,17 +861,17 @@ ApplicationWindow {
             property int pendingIndex: -1
             MenuItem {
                 text: "Close Tab"
-                onTriggered: window.closeTab(tabContextMenu.pendingIndex)
+                onTriggered: window.closeActiveTabAt(tabContextMenu.pendingIndex)
             }
             MenuItem {
                 text: "Close Other Tabs"
-                enabled: tabsModel.count > 2
-                onTriggered: window.closeOtherTabs(tabContextMenu.pendingIndex)
+                enabled: tabs.count > 2
+                onTriggered: tabs.closeOtherTabs(tabContextMenu.pendingIndex)
             }
             MenuItem {
                 text: "Close Tabs to the Right"
-                enabled: tabContextMenu.pendingIndex < tabsModel.count - 1
-                onTriggered: window.closeTabsToRight(tabContextMenu.pendingIndex)
+                enabled: tabContextMenu.pendingIndex < tabs.count - 1
+                onTriggered: tabs.closeTabsToRight(tabContextMenu.pendingIndex)
             }
         }
     }
@@ -1060,8 +895,7 @@ ApplicationWindow {
             session: session
             captureMode: window.captureMode
             onRequestMode: (mode) => {
-                if (window.captureMode !== mode)
-                    window.captureMode = mode
+                window.setCaptureMode(mode)
             }
             onExportScopeRequested: (nodeID, globalX, globalY) => {
                 window.openSidebarExportMenu(nodeID, globalX, globalY)
@@ -1079,23 +913,18 @@ ApplicationWindow {
             StackLayout {
                 id: tabHost
                 anchors.fill: parent
-                currentIndex: window.activeTab
+                currentIndex: tabs.activeTab
 
                 Repeater {
                     id: tabsRepeater
-                    model: tabsModel
+                    model: tabs
 
                     delegate: Item {
                         id: tabContent
                         required property int index
-
-                        // Split is remembered per tab; the launch hook seeds
-                        // tab 0 and recreated delegates read the tab state.
-                        property bool splitVisible: session.startupSplit && index === 0
-                        Component.onCompleted: {
-                            if (tabsModel.count > index)
-                                splitVisible = tabsModel.get(index).splitVisible
-                        }
+                        // Split is remembered per tab (role owned by the
+                        // controller; toggles come through the model).
+                        required property bool splitVisible
                         property alias firstPane: pane0
                         property alias secondPane: pane1
 
@@ -1141,7 +970,7 @@ ApplicationWindow {
     Connections {
         target: session
         function onRevealRequested(packetID) {
-            var tab = tabsRepeater.itemAt(window.activeTab)
+            var tab = tabsRepeater.itemAt(tabs.activeTab)
             if (tab)
                 tab.firstPane.revealPacket(String(packetID))
         }
@@ -1395,27 +1224,6 @@ ApplicationWindow {
     // Keyboard annotation targets (upstream keyDown on the table): the
     // current multi-selection, else the anchor/selected row. Row indexes
     // mirror PacketTableView.targetRowsFor for the keyboard-driven flow.
-    // The pane routing keyboard/table-scoped actions (focusedPaneID).
-    function focusedPane() {
-        var tab = tabsRepeater.itemAt(window.activeTab)
-        if (!tab)
-            return null
-        if (window.focusedPaneID.endsWith(":1") && tab.secondPane.visible)
-            return tab.secondPane
-        return tab.firstPane
-    }
-
-    function packetTargetRows() {
-        const pane = window.focusedPane()
-        const rows = pane ? pane.table.selectedRows : []
-        if (rows.length > 0)
-            return rows
-        if (session.selectedPacketID === "")
-            return []
-        const row = session.packets.rowForPacketID(session.selectedPacketID)
-        return row >= 0 ? [row] : []
-    }
-
     function keyboardTargetIDs() {
         const rows = packetTargetRows()
         const ids = []
@@ -1848,7 +1656,7 @@ ApplicationWindow {
         // Show Related Packets lands on the packets view of the main window
         // (upstream workspaceMode = .packets + activateForNavigation).
         onRelatedRequested: {
-            window.captureMode = "packets"
+            window.setCaptureMode("packets")
             window.show()
             window.raise()
             window.requestActivate()
@@ -1856,36 +1664,14 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
-        // CI/screenshot hooks: workspace mode seed, statistics window, benchmark.
-        window.captureMode = session.startupCaptureMode
+        // CI/screenshot hooks: window size, seeded tabs + scripted ops.
         if (session.startupWindowWidth > 0)
             window.width = session.startupWindowWidth
         if (session.startupWindowHeight > 0)
             window.height = session.startupWindowHeight
-        // Seed the workspace tabs (TCPVIEWER_TABS; tab 0 owns the split seed).
-        var seededTabs = Math.max(1, session.startupTabs)
-        for (var i = 0; i < seededTabs; ++i)
-            tabsModel.append(window.makeTabState(session.startupSplit && i === 0))
-        window.activeTab = 0
-        window.pushTabHistory(tabsModel.get(0).id)
-        if (session.startupSelectTab >= 0)
-            window.selectTab(Math.min(session.startupSelectTab, tabsModel.count - 1))
-        // Scripted tab ops (CI): exercise create/snapshot/restore paths.
-        const tabScript = session.startupTabScript
-        if (tabScript !== "") {
-            const steps = tabScript.split(";")
-            for (let s = 0; s < steps.length; ++s) {
-                const step = steps[s]
-                if (step === "new")
-                    window.newTab()
-                else if (step.startsWith("sel="))
-                    window.selectTab(parseInt(step.slice(4), 10))
-                else if (step.startsWith("filter="))
-                    session.applyFilter(step.slice(7))
-                else if (step.startsWith("mode="))
-                    window.captureMode = step.slice(5)
-            }
-        }
+        tabs.seed(session.startupTabs, session.startupSplit,
+                  session.startupCaptureMode, session.startupTabScript,
+                  session.startupSelectTab)
         if (session.startupStatistics)
             statsTimer.start()
         if (session.startupDiffPackets !== "")
@@ -2133,8 +1919,7 @@ ApplicationWindow {
                         anchors.fill: parent
                         session: controller
                         onRequestMode: (mode) => {
-                            if (window.captureMode !== mode)
-                                window.captureMode = mode
+                            window.setCaptureMode(mode)
                         }
                         onRequestEndpoints: statsWindow.openAndRaise()
                         visible: window.captureMode === "overview"

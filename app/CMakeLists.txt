@@ -23,6 +23,7 @@ qt_add_executable(omarchy-tcpviewer
     src/benchmark.cpp
     src/daemonclient.cpp
     src/sessioncontroller.cpp
+    src/workspacetabscontroller.cpp
     src/packetinspector.cpp
     src/pinstore.cpp
     src/savedpacketstore.cpp
@@ -158,4 +159,20 @@ if(TCPVIEWER_BUILD_TESTS)
     target_include_directories(annotationsstores_test PRIVATE src)
     target_link_libraries(annotationsstores_test PRIVATE Qt6::Test Qt6::Qml)
     add_test(NAME annotationsstores COMMAND annotationsstores_test)
+
+    qt_add_executable(workspacetabscontroller_test
+        tests/workspacetabscontroller_test.cpp
+        src/workspacetabscontroller.cpp
+        src/sessioncontroller.cpp
+        src/daemonclient.cpp
+        src/packetmodel.cpp
+        src/sourcetreemodel.cpp
+        src/packetcolumnlayout.cpp
+        src/packetcustomcolumns.cpp
+        src/pinstore.cpp
+        src/savedpacketstore.cpp
+    )
+    target_include_directories(workspacetabscontroller_test PRIVATE src)
+    target_link_libraries(workspacetabscontroller_test PRIVATE Qt6::Test Qt6::Qml Qt6::Gui Qt6::Network)
+    add_test(NAME workspacetabscontroller COMMAND workspacetabscontroller_test)
 endif()
