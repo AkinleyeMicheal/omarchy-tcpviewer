@@ -223,6 +223,16 @@ page header.
   **Open in New Tab**, scoping the new tab to that node. `File ▸ Open…`
   imports captures into a new offline tab named after the file, leaving the
   current workspace untouched.
+- The workspace is scriptable while the app runs:
+  `tcpviewer-cli tabs list` (stable ids like `tab-2`, active tab, per-tab
+  source/filter/selection/mode), `tabs create --label L`,
+  `tabs select/move/close --tab-id ID` (`close --others` / `--right`),
+  `pane get/focus --pane 0|1`, `tab set-filter --filter TEXT`,
+  `overview get`, `statistics endpoints --group apps|domains|ips|clients`,
+  and `packets reveal PACKET_ID`. These answer on the app's own socket
+  (`$XDG_RUNTIME_DIR/omarchy-tcpviewer/app.sock`) with the same
+  schema_version 1 JSON-lines envelope, exit codes, and `--output json|text`
+  flags as the daemon commands.
 
 ## Live capture
 

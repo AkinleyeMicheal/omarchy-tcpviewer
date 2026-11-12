@@ -83,6 +83,9 @@ public:
     // Rename a tab (file imports name the offline tab after the file; CLI
     // tab management can address it later).
     Q_INVOKABLE void setTabLabel(int row, const QString &label);
+    // The CLI/MCP filter write: stores the filter on the active tab and
+    // applies it like the UI field does.
+    Q_INVOKABLE void applyActiveTabFilter(const QString &filter);
     // File ▸ Open flow: fresh tab named after the import, no filter carried
     // over, then the files route through the standard importer.
     Q_INVOKABLE void importIntoNewTab(const QVariantList &files, const QString &label);

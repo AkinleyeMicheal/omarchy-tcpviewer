@@ -23,10 +23,10 @@ ApplicationWindow {
     // Workspace tabs (upstream tab mode) live in WorkspaceTabsController:
     // each tab owns its source selection, tree scope, filters, selected
     // packet, split, and view mode; the window binds the active tab's mode.
-    readonly property string captureMode: tabs.activeCaptureMode
+    readonly property string captureMode: session.tabs.activeCaptureMode
 
     function setCaptureMode(mode) {
-        tabs.setActiveCaptureMode(mode)
+        session.tabs.setActiveCaptureMode(mode)
     }
 
     // Focused workspace routes inspector fetches (per-pane selection state).
@@ -37,19 +37,19 @@ ApplicationWindow {
     Action { id: closeTabAction; shortcut: "Ctrl+W"; onTriggered: window.closeActiveTab() }
     // Upstream tab switching: Ctrl+Tab / Ctrl+Shift+Tab cycle, Ctrl+[ / Ctrl+]
     // walk the Back/Forward history, Ctrl+Shift+1..9 select the nth tab.
-    Action { id: nextTabAction; shortcut: "Ctrl+Tab"; onTriggered: tabs.selectNextTab(1) }
-    Action { id: previousTabAction; shortcut: "Ctrl+Shift+Tab"; onTriggered: tabs.selectNextTab(-1) }
-    Action { id: tabBackAction; shortcut: "Ctrl+["; onTriggered: tabs.historyStep(-1) }
-    Action { id: tabForwardAction; shortcut: "Ctrl+]"; onTriggered: tabs.historyStep(1) }
-    Action { id: tab1Action; shortcut: "Ctrl+Shift+1"; onTriggered: tabs.selectTab(0) }
-    Action { id: tab2Action; shortcut: "Ctrl+Shift+2"; onTriggered: tabs.selectTab(1) }
-    Action { id: tab3Action; shortcut: "Ctrl+Shift+3"; onTriggered: tabs.selectTab(2) }
-    Action { id: tab4Action; shortcut: "Ctrl+Shift+4"; onTriggered: tabs.selectTab(3) }
-    Action { id: tab5Action; shortcut: "Ctrl+Shift+5"; onTriggered: tabs.selectTab(4) }
-    Action { id: tab6Action; shortcut: "Ctrl+Shift+6"; onTriggered: tabs.selectTab(5) }
-    Action { id: tab7Action; shortcut: "Ctrl+Shift+7"; onTriggered: tabs.selectTab(6) }
-    Action { id: tab8Action; shortcut: "Ctrl+Shift+8"; onTriggered: tabs.selectTab(7) }
-    Action { id: tab9Action; shortcut: "Ctrl+Shift+9"; onTriggered: tabs.selectTab(8) }
+    Action { id: nextTabAction; shortcut: "Ctrl+Tab"; onTriggered: session.tabs.selectNextTab(1) }
+    Action { id: previousTabAction; shortcut: "Ctrl+Shift+Tab"; onTriggered: session.tabs.selectNextTab(-1) }
+    Action { id: tabBackAction; shortcut: "Ctrl+["; onTriggered: session.tabs.historyStep(-1) }
+    Action { id: tabForwardAction; shortcut: "Ctrl+]"; onTriggered: session.tabs.historyStep(1) }
+    Action { id: tab1Action; shortcut: "Ctrl+Shift+1"; onTriggered: session.tabs.selectTab(0) }
+    Action { id: tab2Action; shortcut: "Ctrl+Shift+2"; onTriggered: session.tabs.selectTab(1) }
+    Action { id: tab3Action; shortcut: "Ctrl+Shift+3"; onTriggered: session.tabs.selectTab(2) }
+    Action { id: tab4Action; shortcut: "Ctrl+Shift+4"; onTriggered: session.tabs.selectTab(3) }
+    Action { id: tab5Action; shortcut: "Ctrl+Shift+5"; onTriggered: session.tabs.selectTab(4) }
+    Action { id: tab6Action; shortcut: "Ctrl+Shift+6"; onTriggered: session.tabs.selectTab(5) }
+    Action { id: tab7Action; shortcut: "Ctrl+Shift+7"; onTriggered: session.tabs.selectTab(6) }
+    Action { id: tab8Action; shortcut: "Ctrl+Shift+8"; onTriggered: session.tabs.selectTab(7) }
+    Action { id: tab9Action; shortcut: "Ctrl+Shift+9"; onTriggered: session.tabs.selectTab(8) }
     Action { id: quitAction; shortcut: "Ctrl+Q"; onTriggered: Qt.quit() }
     Action { id: focusFilterAction; shortcut: "Ctrl+F"; onTriggered: window.focusDisplayFilter() }
     Action { id: focusInspectorFilterAction; shortcut: "Ctrl+Alt+F"; onTriggered: window.focusInspectorFilter() }
@@ -223,7 +223,7 @@ ApplicationWindow {
 
     // The pane routing keyboard/table-scoped actions (focusedPaneID).
     function focusedPane() {
-        var tab = tabsRepeater.itemAt(tabs.activeTab)
+        var tab = tabsRepeater.itemAt(session.tabs.activeTab)
         if (!tab)
             return null
         if (window.focusedPaneID.endsWith(":1") && tab.secondPane.visible)
@@ -245,33 +245,33 @@ ApplicationWindow {
     function restoreSelection(packetID) {
         if (packetID === "")
             return
-        const target = tabs.activeTab
+        const target = session.tabs.activeTab
         var tab = tabsRepeater.itemAt(target)
         if (tab)
             tab.revealPacket(packetID)
     }
 
     function newTab() {
-        tabs.newTab()
-        window.focusedPaneID = tabs.activeTab + ":0"
+        session.tabs.newTab()
+        window.focusedPaneID = session.tabs.activeTab + ":0"
     }
 
     function closeActiveTab() {
-        if (!tabs.closeTab(tabs.activeTab))
+        if (!session.tabs.closeTab(session.tabs.activeTab))
             window.close()
     }
 
     // Close a specific tab; closing the last tab closes the window
     // (upstream's behavior).
     function closeActiveTabAt(index) {
-        if (!tabs.closeTab(index))
+        if (!session.tabs.closeTab(index))
             window.close()
     }
 
     // Sidebar rows: scope the new tab to the clicked node.
     function openSourceInNewTab(nodeID) {
-        tabs.openSourceInNewTab(String(nodeID))
-        window.focusedPaneID = tabs.activeTab + ":0"
+        session.tabs.openSourceInNewTab(String(nodeID))
+        window.focusedPaneID = session.tabs.activeTab + ":0"
     }
 
     // File imports land in a fresh offline tab, keeping the current view
@@ -282,12 +282,12 @@ ApplicationWindow {
             const base = window.fileDialogPath(files[0]).split("/").pop()
             label = files.length > 1 ? base + " +" + (files.length - 1) : base
         }
-        tabs.importIntoNewTab(files, label)
-        window.focusedPaneID = tabs.activeTab + ":0"
+        session.tabs.importIntoNewTab(files, label)
+        window.focusedPaneID = session.tabs.activeTab + ":0"
     }
 
     function toggleSplit() {
-        tabs.toggleSplit()
+        session.tabs.toggleSplit()
     }
 
     SessionController {
@@ -295,22 +295,30 @@ ApplicationWindow {
         Component.onCompleted: start()
     }
 
-    // Workspace tab state (per-tab source/scope/filter/selection/mode).
-    WorkspaceTabsController {
-        id: tabs
-        session: session
-    }
-
     // QML-side routing: saved selections re-reveal in the focused pane (the
-    // inspector fetch targets the pane state), and tab switches align the
-    // focused workspace.
+    // inspector fetch targets the pane state), tab switches align the
+    // focused workspace, and the command bridge can reveal packets.
     Connections {
-        target: tabs
+        target: session.tabs
         function onRestoreSelectionRequested(packetID) {
             window.restoreSelection(packetID)
         }
         function onActiveTabChanged(index) {
             window.focusedPaneID = index + ":0"
+        }
+    }
+
+    // packets.reveal from the CLI/MCP bridge: bring the window forward and
+    // present the packet in the focused pane.
+    Connections {
+        target: session.appCommands
+        function onRevealRequested(packetID) {
+            if (packetID === "")
+                return
+            window.show()
+            window.raise()
+            window.requestActivate()
+            window.restoreSelection(packetID)
         }
     }
 
@@ -743,7 +751,7 @@ ApplicationWindow {
         anchors.top: toolbar.bottom
         anchors.left: parent.left
         anchors.right: parent.right
-        height: tabs.count > 1 ? 30 : 0
+        height: session.tabs.count > 1 ? 30 : 0
         visible: height > 0
         color: Theme.headerBackground
 
@@ -754,14 +762,14 @@ ApplicationWindow {
             spacing: 4
 
             Repeater {
-                model: tabs
+                model: session.tabs
 
                 delegate: Rectangle {
                     id: tabDelegate
                     required property int index
                     required property string label
 
-                    readonly property bool active: tabs.activeTab === index
+                    readonly property bool active: session.tabs.activeTab === index
 
                     width: 168
                     height: 22
@@ -799,7 +807,7 @@ ApplicationWindow {
                             // Alt-click closes the other tabs (upstream).
                             onClicked: (mouse) => {
                                 if (mouse.modifiers & Qt.AltModifier)
-                                    tabs.closeOtherTabs(tabDelegate.index)
+                                    session.tabs.closeOtherTabs(tabDelegate.index)
                                 else
                                     window.closeActiveTabAt(tabDelegate.index)
                             }
@@ -830,9 +838,9 @@ ApplicationWindow {
                             const slot = 172
                             const globalX = tabDelegate.mapToItem(tabStripRow, 0, 0).x + mouse.x
                             let target = Math.floor(globalX / slot)
-                            target = Math.max(0, Math.min(tabs.count - 1, target))
+                            target = Math.max(0, Math.min(session.tabs.count - 1, target))
                             if (target !== tabDelegate.index)
-                                tabs.moveTab(tabDelegate.index, target)
+                                session.tabs.moveTab(tabDelegate.index, target)
                         }
                         onClicked: (mouse) => {
                             if (mouse.button === Qt.RightButton) {
@@ -840,7 +848,7 @@ ApplicationWindow {
                                 tabContextMenu.popup()
                                 return
                             }
-                            tabs.selectTab(tabDelegate.index)
+                            session.tabs.selectTab(tabDelegate.index)
                         }
                     }
                 }
@@ -865,13 +873,13 @@ ApplicationWindow {
             }
             MenuItem {
                 text: "Close Other Tabs"
-                enabled: tabs.count > 2
-                onTriggered: tabs.closeOtherTabs(tabContextMenu.pendingIndex)
+                enabled: session.tabs.count > 2
+                onTriggered: session.tabs.closeOtherTabs(tabContextMenu.pendingIndex)
             }
             MenuItem {
                 text: "Close Tabs to the Right"
-                enabled: tabContextMenu.pendingIndex < tabs.count - 1
-                onTriggered: tabs.closeTabsToRight(tabContextMenu.pendingIndex)
+                enabled: tabContextMenu.pendingIndex < session.tabs.count - 1
+                onTriggered: session.tabs.closeTabsToRight(tabContextMenu.pendingIndex)
             }
         }
     }
@@ -913,11 +921,11 @@ ApplicationWindow {
             StackLayout {
                 id: tabHost
                 anchors.fill: parent
-                currentIndex: tabs.activeTab
+                currentIndex: session.tabs.activeTab
 
                 Repeater {
                     id: tabsRepeater
-                    model: tabs
+                    model: session.tabs
 
                     delegate: Item {
                         id: tabContent
@@ -970,7 +978,7 @@ ApplicationWindow {
     Connections {
         target: session
         function onRevealRequested(packetID) {
-            var tab = tabsRepeater.itemAt(tabs.activeTab)
+            var tab = tabsRepeater.itemAt(session.tabs.activeTab)
             if (tab)
                 tab.firstPane.revealPacket(String(packetID))
         }
@@ -1643,15 +1651,10 @@ ApplicationWindow {
         diff: diff
     }
 
-    // Endpoint statistics (toolbar Σ), upstream Tools item.
-    EndpointStatisticsModel {
-        id: endpointStats
-    }
-
     EndpointStatisticsWindow {
         id: statsWindow
         visible: false
-        stats: endpointStats
+        stats: session.endpointStats
         session: session
         // Show Related Packets lands on the packets view of the main window
         // (upstream workspaceMode = .packets + activateForNavigation).
@@ -1669,7 +1672,7 @@ ApplicationWindow {
             window.width = session.startupWindowWidth
         if (session.startupWindowHeight > 0)
             window.height = session.startupWindowHeight
-        tabs.seed(session.startupTabs, session.startupSplit,
+        session.tabs.seed(session.startupTabs, session.startupSplit,
                   session.startupCaptureMode, session.startupTabScript,
                   session.startupSelectTab)
         if (session.startupStatistics)

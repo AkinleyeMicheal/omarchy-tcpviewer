@@ -1,5 +1,7 @@
 #include "sessioncontroller.h"
 
+#include "appcommandserver.h"
+
 #include <QClipboard>
 #include <QDateTime>
 #include <QFile>
@@ -48,7 +50,11 @@ SessionController::SessionController(QObject *parent)
     , m_sourceTree(new SourceTreeModel(this))
     , m_columnLayout(new PacketColumnLayout(this))
     , m_customColumns(new PacketCustomColumns(this))
+    , m_endpointStats(new EndpointStatisticsModel(this))
+    , m_appCommands(new AppCommandServer(this))
 {
+    m_tabs = new WorkspaceTabsController(this);
+    m_tabs->setSession(this);
     // CI/screenshot hooks (mirroring TCPVIEWER_OPEN_FILES): hide the live
     // interface controls so captured imagery only shows sanitized data.
     m_interfacesHidden = qEnvironmentVariableIsSet("TCPVIEWER_HIDE_INTERFACES");
@@ -216,6 +222,11 @@ SessionController::SessionController(QObject *parent)
 
 void SessionController::start()
 {
+    // Local command bridge (CLI/MCP reach the running app; upstream
+    // TCP Viewer's own scripting surface). Listens on the runtime dir next to
+    // the daemon socket; TCPVIEWER_APP_SOCKET overrides for tests/CI.
+    m_appCommands->listen();
+
     // Launch-with-files hook (also used by CI screenshots). Semicolon-separated
     // absolute paths, matching the eventual CLI argument handling.
     const QString openFiles = qEnvironmentVariable("TCPVIEWER_OPEN_FILES");

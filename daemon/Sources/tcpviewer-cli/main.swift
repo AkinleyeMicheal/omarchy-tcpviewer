@@ -39,6 +39,19 @@ let twoWordCommands: Set<String> = [
     "file.import", "file.export", "file.export_session",
     "file.session_state",
     "app.status",
+    // Workspace commands answered by the running APP (not the daemon).
+    "tabs.list", "tabs.create", "tabs.select", "tabs.move", "tabs.close",
+    "pane.get", "pane.focus", "tab.set_filter",
+    "overview.get", "statistics.endpoints", "packets.reveal",
+]
+
+// App-side commands route to the app bridge socket (workspace state lives in
+// the GUI process; upstream's CLI drives the app the same way).
+let appCommands: Set<String> = [
+    "tabs.list", "tabs.create", "tabs.select", "tabs.move", "tabs.close",
+    "tabs.close_others", "tabs.close_right",
+    "pane.get", "pane.focus", "tab.set_filter",
+    "overview.get", "statistics.endpoints", "packets.reveal",
 ]
 
 // Positional argument mapping for upstream's "COMMAND ID" forms.
@@ -51,6 +64,7 @@ let positionalKeys: [String: [String]] = [
     "file.export": ["path"],
     "file.export_session": ["path"],
     "source.close": ["source_id"],
+    "packets.reveal": ["packet_id"],
 ]
 
 // Long operations inherit upstream's 300 s timeout (import/export/follow).
@@ -91,8 +105,18 @@ func usage() -> Never {
       --output json|text   default json (schema_version 1)
       --pretty             pretty-print JSON
       --timeout SECONDS    default 30 (300 for import/export/follow)
-      --socket PATH        override daemon socket (default $XDG_RUNTIME_DIR)
+      --socket PATH        override socket (daemon default $XDG_RUNTIME_DIR/omarchy-tcpviewer/tcpviewerd.sock,
+                           workspace commands default .../app.sock)
       --events             print capture events while waiting for the reply
+
+    workspace commands (answered by the running app):
+      tabs list | tabs create [--label L] | tabs select --tab-id ID
+      tabs move --tab-id ID --to N | tabs close [--tab-id ID] [--others] [--right]
+      pane get --pane 0|1 | pane focus --pane 0|1
+      tab set-filter --filter TEXT
+      overview get
+      statistics endpoints --group apps|domains|ips|clients [--search S] [--limit N]
+      packets reveal PACKET_ID
 
     exit codes: 0 success, 2 usage/validation, 3 transport, 4 daemon error
     """
@@ -258,6 +282,76 @@ func defaultSocketPath() -> String {
     return "\(runtime)/omarchy-tcpviewer/tcpviewerd.sock"
 }
 
+func defaultAppSocketPath() -> String {
+    guard let runtime = ProcessInfo.processInfo.environment["XDG_RUNTIME_DIR"] else {
+        fail("XDG_RUNTIME_DIR is not set; is this an Omarchy user session?", code: 3)
+    }
+    return "\(runtime)/omarchy-tcpviewer/app.sock"
+}
+
+// MARK: - App workspace commands
+
+/// Build the app-bridge request for workspace commands. Same schema_version 1
+/// envelope as the daemon, but answered by the GUI process (its tabs/panes/
+/// overview/statistics state).
+func buildAppRequest(args: CLIArguments) -> (command: String, envelope: [String: IPCValue]) {
+    var parts = args.commandPath
+    let last = parts.removeLast().replacingOccurrences(of: "-", with: "_")
+    parts.append(last)
+    let command = parts.joined(separator: ".")
+    guard appCommands.contains(command) else {
+        fail("unknown command: \(args.commandPath.joined(separator: ".")) (try --help)", code: 2)
+    }
+
+    var params: [String: IPCValue] = [:]
+    if let keys = positionalKeys[command] {
+        if args.positionals.count > keys.count {
+            fail("too many arguments for \(command)", code: 2)
+        }
+        if args.positionals.count < keys.count {
+            for (index, key) in keys.enumerated() {
+                if index < args.positionals.count { continue }
+                if args.flags[key] != nil
+                    || args.flags[key.replacingOccurrences(of: "_", with: "-")] != nil {
+                    continue
+                }
+                fail("missing argument: \(key.replacingOccurrences(of: "_", with: " "))", code: 2)
+            }
+        }
+        for (index, key) in keys.enumerated() where index < args.positionals.count {
+            params[key] = wireValue(args.positionals[index])
+        }
+    } else if !args.positionals.isEmpty {
+        fail("unexpected argument: \(args.positionals[0])", code: 2)
+    }
+    for (key, raw) in args.flags {
+        params[key.replacingOccurrences(of: "-", with: "_")] = wireValue(raw)
+    }
+
+    // tabs close --others / --right pick the close flavor; the bare close
+    // targets the active tab without --tab-id.
+    var effective = command
+    if command == "tabs.close" {
+        let others = params["others"]?.boolValue == true
+        let right = params["right"]?.boolValue == true
+        params.removeValue(forKey: "others")
+        params.removeValue(forKey: "right")
+        if others && right {
+            fail("--others and --right are mutually exclusive", code: 2)
+        }
+        if others { effective = "tabs.close_others" }
+        if right { effective = "tabs.close_right" }
+    }
+
+    let envelope: [String: IPCValue] = [
+        "schema_version": .int(1),
+        "request_id": .string(UUID().uuidString.lowercased()),
+        "command": .string(effective),
+        "params": .object(params),
+    ]
+    return (effective, envelope)
+}
+
 func connectSocket(path: String) -> Int32 {
     let fd = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
     guard fd >= 0 else { fail("socket(): \(String(cString: strerror(errno)))", code: 3) }
@@ -397,8 +491,56 @@ func formatEndpoint(_ value: IPCValue?) -> String {
 
 // MARK: - Main
 
+/// Workspace commands: build the app envelope, exchange over the app socket,
+/// and print through the shared response path.
+func runAppCommand(args: CLIArguments) -> Never {
+    let (_, envelope) = buildAppRequest(args: args)
+    guard let line = try? IPCCodec.encodeLine(envelope, limit: IPCLimits.maxRequestBytes) else {
+        fail("failed to encode request", code: 2)
+    }
+
+    let socketPath = args.socketPath ?? defaultAppSocketPath()
+    let fd = connectSocket(path: socketPath)
+    defer { close(fd) }
+
+    var timeout = timeval(tv_sec: Int(args.timeoutSeconds), tv_usec: 0)
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    line.withUnsafeBytes { raw in
+        _ = write(fd, raw.baseAddress!, raw.count)
+    }
+
+    var readBuffer = Data()
+    while let responseLine = readLine(fd: fd, buffer: &readBuffer) {
+        guard !responseLine.isEmpty else { continue }
+        switch (try? IPCCodec.decodeServerLine(line: responseLine)) {
+        case .response(let response):
+            guard response.requestID == envelope["request_id"]?.stringValue else { continue }
+            emit(response: response, args: args)
+        case .event:
+            continue // the app bridge never emits events
+        case nil:
+            fail("app sent a malformed line", code: 3)
+        }
+    }
+    fail("no response from app (transport closed or timed out); is omarchy-tcpviewer running?", code: 3)
+}
+
 func run() -> Never {
     let args = parseArguments()
+
+    // Workspace commands route to the app bridge; everything else to the
+    // daemon. Same wire envelope either way.
+    let joinedParts: [String] = {
+        var parts = args.commandPath
+        let last = parts.removeLast().replacingOccurrences(of: "-", with: "_")
+        parts.append(last)
+        return parts
+    }()
+
+    if appCommands.contains(joinedParts.joined(separator: ".")) {
+        runAppCommand(args: args)
+    }
+
     let request = buildRequest(args: args)
     let socketPath = args.socketPath ?? defaultSocketPath()
 

@@ -1,12 +1,14 @@
 #pragma once
 
 #include "daemonclient.h"
+#include "endpointstatsmodel.h"
 #include "packetcolumnlayout.h"
 #include "packetcustomcolumns.h"
 #include "packetmodel.h"
 #include "pinstore.h"
 #include "savedpacketstore.h"
 #include "sourcetreemodel.h"
+#include "workspacetabscontroller.h"
 
 #include <QByteArray>
 #include <QHash>
@@ -16,6 +18,7 @@
 #include <QtQml/qqmlregistration.h>
 
 class QTimer;
+class AppCommandServer;
 
 // Owns the viewer's daemon session: interface list, capture lifecycle, source
 // selection, and the pull-based packet stream (packets.list --since-id).
@@ -26,6 +29,11 @@ class SessionController : public QObject
     Q_PROPERTY(DaemonClient *client READ client CONSTANT)
     Q_PROPERTY(PacketListModel *packets READ packets CONSTANT)
     Q_PROPERTY(SourceTreeModel *sourceTree READ sourceTree CONSTANT)
+    // Workspace tabs + endpoint statistics are app state the command bridge
+    // (CLI/MCP) reaches through the session.
+    Q_PROPERTY(WorkspaceTabsController *tabs READ tabs CONSTANT)
+    Q_PROPERTY(EndpointStatisticsModel *endpointStats READ endpointStats CONSTANT)
+    Q_PROPERTY(AppCommandServer *appCommands READ appCommands CONSTANT)
     Q_PROPERTY(PacketColumnLayout *columnLayout READ columnLayout CONSTANT)
     Q_PROPERTY(PacketCustomColumns *customColumns READ customColumns CONSTANT)
     Q_PROPERTY(QString selectedPacketID READ selectedPacketID NOTIFY selectedPacketIDChanged)
@@ -102,6 +110,9 @@ public:
     SourceTreeModel *sourceTree() const { return m_sourceTree; }
     PacketColumnLayout *columnLayout() const { return m_columnLayout; }
     PacketCustomColumns *customColumns() const { return m_customColumns; }
+    WorkspaceTabsController *tabs() const { return m_tabs; }
+    EndpointStatisticsModel *endpointStats() const { return m_endpointStats; }
+    AppCommandServer *appCommands() const { return m_appCommands; }
     QString selectedPacketID() const { return m_selectedPacketID; }
     bool startupSplit() const { return qEnvironmentVariableIsSet("TCPVIEWER_SPLIT"); }
     int startupTabs() const
@@ -387,6 +398,9 @@ private:
     SourceTreeModel *m_sourceTree = nullptr;
     PacketColumnLayout *m_columnLayout = nullptr;
     PacketCustomColumns *m_customColumns = nullptr;
+    WorkspaceTabsController *m_tabs = nullptr;
+    EndpointStatisticsModel *m_endpointStats = nullptr;
+    AppCommandServer *m_appCommands = nullptr;
     QTimer *m_pollTimer = nullptr;
     QTimer *m_statusTimer = nullptr;
 

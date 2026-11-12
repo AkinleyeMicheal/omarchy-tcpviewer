@@ -377,6 +377,17 @@ void WorkspaceTabsController::setTabLabel(int row, const QString &label)
     emit dataChanged(changed, changed, {LabelRole});
 }
 
+void WorkspaceTabsController::applyActiveTabFilter(const QString &filter)
+{
+    if (m_activeTab < 0 || m_activeTab >= m_entries.size())
+        return;
+    m_entries[m_activeTab].filterText = filter;
+    const QModelIndex changed = index(m_activeTab);
+    emit dataChanged(changed, changed, {FilterTextRole});
+    if (m_session)
+        m_session->applyFilter(filter);
+}
+
 void WorkspaceTabsController::importIntoNewTab(const QVariantList &files, const QString &label)
 {
     newTab();
