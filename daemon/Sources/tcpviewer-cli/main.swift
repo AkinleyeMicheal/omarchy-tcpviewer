@@ -352,7 +352,7 @@ func buildAppRequest(args: CLIArguments) -> (command: String, envelope: [String:
     return (effective, envelope)
 }
 
-func connectSocket(path: String) -> Int32 {
+func connectSocket(path: String, hint: String = "tcpviewerd") -> Int32 {
     let fd = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
     guard fd >= 0 else { fail("socket(): \(String(cString: strerror(errno)))", code: 3) }
 
@@ -374,7 +374,7 @@ func connectSocket(path: String) -> Int32 {
         }
     }
     guard connectResult == 0 else {
-        fail("cannot connect to \(path): \(String(cString: strerror(errno))) (is tcpviewerd running?)", code: 3)
+        fail("cannot connect to \(path): \(String(cString: strerror(errno))) (is \(hint) running?)", code: 3)
     }
     return fd
 }
@@ -500,7 +500,7 @@ func runAppCommand(args: CLIArguments) -> Never {
     }
 
     let socketPath = args.socketPath ?? defaultAppSocketPath()
-    let fd = connectSocket(path: socketPath)
+    let fd = connectSocket(path: socketPath, hint: "omarchy-tcpviewer")
     defer { close(fd) }
 
     var timeout = timeval(tv_sec: Int(args.timeoutSeconds), tv_usec: 0)
