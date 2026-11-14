@@ -5,6 +5,7 @@
 #include <QClipboard>
 #include <QDateTime>
 #include <QFile>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -285,7 +286,9 @@ void SessionController::handleConnectedChanged()
         for (const QString &path : m_pendingOpenFiles)
             paths.append(path);
         m_pendingOpenFiles.clear();
-        importFiles(paths);
+        // Upstream: imported files open in offline tabs (Open in New Tab);
+        // the tab is named after the file, matching the File → Open path.
+        m_tabs->importIntoNewTab(paths, openFilesLabel(paths));
     }
 
     refreshInterfaces();
@@ -2115,6 +2118,18 @@ void SessionController::exportSession(const QString &path)
         {QStringLiteral("pins"), pinValues},
         {QStringLiteral("saved_records"), savedValues},
     }, 300);
+}
+
+// "fixture.pcap" / "fixture.pcap +2" — the tab label Main.qml derives for
+// multi-file imports, shared by the launch-with-files path.
+QString SessionController::openFilesLabel(const QVariantList &paths)
+{
+    if (paths.isEmpty())
+        return QString();
+    const QString base = QFileInfo(paths.first().toString()).fileName();
+    if (paths.size() > 1)
+        return base + QStringLiteral(" +%1").arg(paths.size() - 1);
+    return base;
 }
 
 PacketRow SessionController::parseSummary(const QVariantMap &summary)

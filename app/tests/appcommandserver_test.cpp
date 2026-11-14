@@ -26,6 +26,7 @@ private slots:
     void tabFilterAndPane();
     void overviewAndStatistics();
     void packetsReveal();
+    void closeFlavorsDefaultToActiveTab();
     void unknownCommandAndLastTabClose();
 
 private:
@@ -222,6 +223,29 @@ void AppCommandServerTest::unknownCommandAndLastTabClose()
                  .value(QStringLiteral("window_closed")).toBool(), true);
     // The workspace keeps the tab; the caller owns the window close.
     QCOMPARE(m_session->tabs()->count(), 1);
+}
+
+void AppCommandServerTest::closeFlavorsDefaultToActiveTab()
+{
+    // Upstream's Close Other Tabs / Close Tabs to the Right menu items
+    // target the current tab: an absent tab_id keeps the active one.
+    // Seed first: earlier lifecycle tests leave the workspace reordered.
+    m_session->tabs()->seed(2, false, QStringLiteral("packets"), QString(), -1);
+    m_session->tabs()->selectTab(1);
+    QJsonObject response = send(QStringLiteral("tabs.close_others"));
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(m_session->tabs()->count(), 1);
+    QCOMPARE(m_session->tabs()->tabID(0), QStringLiteral("tab-2"));
+    QCOMPARE(response.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("remaining")).toInt(), 1);
+
+    // Rebuild a workspace; close_right from the first tab drops the rest.
+    m_session->tabs()->seed(3, false, QStringLiteral("packets"), QString(), -1);
+    m_session->tabs()->selectTab(0);
+    response = send(QStringLiteral("tabs.close_right"));
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(m_session->tabs()->count(), 1);
+    QCOMPARE(m_session->tabs()->tabID(0), QStringLiteral("tab-1"));
 }
 
 QTEST_MAIN(AppCommandServerTest)

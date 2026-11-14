@@ -25,6 +25,20 @@ void WorkspaceTabsController::setSession(SessionController *session)
     // spin forever.
     connect(m_session->packets(), &PacketListModel::revisionChanged,
             this, &WorkspaceTabsController::tickPendingRestore);
+    // A source opened into the active tab (import finished, live capture
+    // started): record it so the tab's entry matches what it displays.
+    // Only the source id — filter/tree/selection keep their pending-restore
+    // state until the switched-to rows are visible.
+    connect(m_session, &SessionController::sourceOpened, this, [this](const QString &sourceID) {
+        if (m_activeTab < 0 || m_activeTab >= m_entries.size())
+            return;
+        TabEntry &entry = m_entries[m_activeTab];
+        if (entry.sourceID == sourceID)
+            return;
+        entry.sourceID = sourceID;
+        const QModelIndex changed = index(m_activeTab);
+        emit dataChanged(changed, changed, {SourceIdRole});
+    });
 }
 
 int WorkspaceTabsController::rowCount(const QModelIndex &parent) const

@@ -238,7 +238,10 @@ void AppCommandServer::dispatch(QLocalSocket *socket, const QString &requestID,
         return;
     }
     if (command == QLatin1String("tabs.close_others") || command == QLatin1String("tabs.close_right")) {
-        const int index = tabIndexByID(tabs, params.value(QStringLiteral("tab_id")).toString());
+        // Upstream's menu items target the current tab; an absent tab_id
+        // means "keep the active tab".
+        const QString target = params.value(QStringLiteral("tab_id")).toString();
+        const int index = target.isEmpty() ? tabs->activeTab() : tabIndexByID(tabs, target);
         if (index < 0) {
             sendError(socket, requestID, command, QStringLiteral("not_found"),
                       QStringLiteral("unknown tab"));

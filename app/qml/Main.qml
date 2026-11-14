@@ -1094,7 +1094,7 @@ ApplicationWindow {
                 return
             }
             if (paths.length > 0)
-                session.importFiles(paths)
+                window.importIntoNewTab(paths)
         }
     }
 

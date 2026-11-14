@@ -379,6 +379,7 @@ private:
     void setFilterTextInternal(const QString &filter);
     void applyTreeSelectHook();
     static PacketRow parseSummary(const QVariantMap &summary);
+    static QString openFilesLabel(const QVariantList &paths);
 
     PinStore m_pinStore;
     QHash<QString, PinStore> m_documentPins;
