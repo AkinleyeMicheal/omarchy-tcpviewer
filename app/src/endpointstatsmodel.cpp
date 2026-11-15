@@ -316,6 +316,15 @@ void EndpointStatisticsModel::clickSort(int column)
     refreshView();
 }
 
+void EndpointStatisticsModel::setSortOrder(int column, bool ascending)
+{
+    if (column < 0 || column >= kColumnCount)
+        return;
+    m_sortColumn[m_group] = column;
+    m_sortAscending[m_group] = ascending;
+    emit sortChanged();
+}
+
 QVariantList EndpointStatisticsModel::groupCounts() const
 {
     QVariantList counts;

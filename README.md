@@ -225,14 +225,42 @@ page header.
   current workspace untouched.
 - The workspace is scriptable while the app runs:
   `tcpviewer-cli tabs list` (stable ids like `tab-2`, active tab, per-tab
-  source/filter/selection/mode), `tabs create --label L`,
-  `tabs select/move/close --tab-id ID` (`close --others` / `--right`),
-  `pane get/focus --pane 0|1`, `tab set-filter --filter TEXT`,
-  `overview get`, `statistics endpoints --group apps|domains|ips|clients`,
-  and `packets reveal PACKET_ID`. These answer on the app's own socket
+  source/filter/selection/mode), `tabs create --label L` (`select=false`
+  leaves the current tab selected), `tabs select/move/close --tab-id ID`
+  (`close --others` / `--right` keep the active tab), `pane get/focus
+  --pane 0|1`, `tab set-filter --filter TEXT`, `overview get`,
+  `statistics endpoints --group apps|domains|ipv4|ipv6|tcp|udp` (with
+  `--search`, `--sort`, `--order`, `--offset`, `--limit`), and
+  `packets reveal PACKET_ID`. These answer on the app's own socket
   (`$XDG_RUNTIME_DIR/omarchy-tcpviewer/app.sock`) with the same
   schema_version 1 JSON-lines envelope, exit codes, and `--output json|text`
-  flags as the daemon commands.
+  flags as the daemon commands. Connections are kernel-checked to the
+  owning user (SO_PEERCRED); the bridge answers only same-user clients.
+
+## MCP (AI agents)
+
+- The app ships an MCP stdio server that AI clients register once:
+  `claude mcp add --transport stdio --scope user tcpviewer -- <install>/app/build/omarchy-tcpviewer-mcp`
+  (or the equivalent `codex mcp add tcpviewer -- …`). Upstream gates MCP
+  behind a PRO license; this port is free (known N/A).
+- The helper forwards tool calls to the running app's command bridge — the
+  same surface the CLI uses. Tools cover the workspace and analysis surface:
+  `get_app_status`, `list_workspaces`, `list_tabs`, `create_tab`,
+  `select_tab`, `move_tab`, `close_tab` (requires `confirm=true`),
+  `get_pane`, `set_split_view`, `focus_pane`, `get_overview_statistics`,
+  `get_endpoint_statistics`, `query_packets` (the pane's loaded packet
+  page), and `reveal_packet`.
+- Two settings control it (Settings UI lands with the settings cluster;
+  today they live in `~/.config/omarchy-tcpviewer/Omarchy TCPViewer.ini`
+  under `[mcp]`): `enabled=false` refuses every tool call with a
+  "disabled in omarchy-tcpviewer settings" error, and `redaction=true`
+  (the default, matching upstream) scrubs sensitive values
+  (authorization, cookies, tokens, credentials, private keys, api keys)
+  from everything the bridge sends to the MCP client. `TCPVIEWER_MCP_ENABLED`
+  / `TCPVIEWER_MCP_REDACTION` environment overrides exist for CI.
+- Packet details, packet bytes, stream following, capture control, and
+  import/export MCP tools are upstream's surface but not wired yet; the CLI
+  and the app UI cover those operations directly.
 
 ## Live capture
 

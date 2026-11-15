@@ -28,6 +28,10 @@ private slots:
     void packetsReveal();
     void closeFlavorsDefaultToActiveTab();
     void unknownCommandAndLastTabClose();
+    // MCP cases last: a successful mcp.hello marks the shared connection,
+    // which would leak the MCP gate into the other cases.
+    void mcpHandshakeAndRedaction();
+    void mcpWorkspaceCommands();
 
 private:
     void request(const QJsonObject &json, QJsonObject *out);
@@ -246,6 +250,130 @@ void AppCommandServerTest::closeFlavorsDefaultToActiveTab()
     QCOMPARE(response.value(QStringLiteral("ok")).toBool(), true);
     QCOMPARE(m_session->tabs()->count(), 1);
     QCOMPARE(m_session->tabs()->tabID(0), QStringLiteral("tab-1"));
+}
+
+void AppCommandServerTest::mcpHandshakeAndRedaction()
+{
+    // Default is off (upstream ships MCP disabled): the announce refuses.
+    qputenv("TCPVIEWER_MCP_ENABLED", "0");
+    qputenv("TCPVIEWER_MCP_REDACTION", "1");
+    QJsonObject response = send(QStringLiteral("mcp.hello"));
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), false);
+    QCOMPARE(response.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("code")).toString(), QStringLiteral("not_enabled"));
+
+    // Enabled: the announce marks the connection and reports the redaction
+    // setting; the app setting is upstream's Settings → MCP switch.
+    qputenv("TCPVIEWER_MCP_ENABLED", "1");
+    response = send(QStringLiteral("mcp.hello"));
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(response.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("app")).toString(), QStringLiteral("omarchy-tcpviewer"));
+    QCOMPARE(response.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("redaction")).toBool(), true);
+    // A disabled switch mid-connection refuses MCP requests (the announce
+    // reads the setting on every call).
+    qputenv("TCPVIEWER_MCP_ENABLED", "0");
+    response = send(QStringLiteral("tabs.list"));
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), false);
+    QCOMPARE(response.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("code")).toString(), QStringLiteral("not_enabled"));
+    qputenv("TCPVIEWER_MCP_ENABLED", "1");
+
+    // The redaction scrubber (upstream "Redact Sensitive Data Before
+    // Sending to AI"): sensitive keys are masked, keys that differ only by
+    // separators match, and everything else survives.
+    QVariant scrubbed = QVariantMap{
+        {QStringLiteral("authorization"), QStringLiteral("Bearer xyz")},
+        {QStringLiteral("Set-Cookie"), QStringLiteral("session=abc")},
+        {QStringLiteral("api_key"), QStringLiteral("k-123")},
+        {QStringLiteral("nested"), QVariantList{
+            QVariantMap{{QStringLiteral("password"), QStringLiteral("hunter2")},
+                {QStringLiteral("summary"), QStringLiteral("keep me")}}},
+        },
+        {QStringLiteral("label"), QStringLiteral("keep me")},
+    };
+    AppCommandServer::redactValue(scrubbed);
+    const QVariantMap map = scrubbed.toMap();
+    QCOMPARE(map.value(QStringLiteral("authorization")).toString(), QStringLiteral("[redacted]"));
+    QCOMPARE(map.value(QStringLiteral("Set-Cookie")).toString(), QStringLiteral("[redacted]"));
+    QCOMPARE(map.value(QStringLiteral("api_key")).toString(), QStringLiteral("[redacted]"));
+    QCOMPARE(map.value(QStringLiteral("label")).toString(), QStringLiteral("keep me"));
+    const QVariantList nested = map.value(QStringLiteral("nested")).toList();
+    QCOMPARE(nested.first().toMap().value(QStringLiteral("password")).toString(),
+             QStringLiteral("[redacted]"));
+    QCOMPARE(nested.first().toMap().value(QStringLiteral("summary")).toString(),
+             QStringLiteral("keep me"));
+
+    qunsetenv("TCPVIEWER_MCP_ENABLED");
+    qunsetenv("TCPVIEWER_MCP_REDACTION");
+}
+
+void AppCommandServerTest::mcpWorkspaceCommands()
+{
+    // A marked connection (from the handshake case) needs the setting on.
+    qputenv("TCPVIEWER_MCP_ENABLED", "1");
+    qputenv("TCPVIEWER_MCP_REDACTION", "1");
+    m_session->tabs()->seed(2, false, QStringLiteral("packets"), QString(), -1);
+    m_session->tabs()->selectTab(0);
+
+    // create_tab's select=false leaves the current tab selected.
+    QJsonObject response = send(QStringLiteral("tabs.create"),
+                                {{QStringLiteral("label"), QStringLiteral("bg.pcap")},
+                                 {QStringLiteral("select"), false}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(m_session->tabs()->count(), 3);
+    QCOMPARE(m_session->tabs()->tabID(m_session->tabs()->activeTab()), QStringLiteral("tab-1"));
+    QCOMPARE(m_session->tabs()->tabID(2), QStringLiteral("tab-3"));
+
+    // set_split_view writes the active tab's split state.
+    response = send(QStringLiteral("tabs.set_split"), {{QStringLiteral("enabled"), true}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(response.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("split_visible")).toBool(), true);
+    response = send(QStringLiteral("tabs.set_split"), {{QStringLiteral("enabled"), false}});
+    QCOMPARE(response.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("split_visible")).toBool(), false);
+
+    // packets.query: the loaded-page window (empty without a daemon source).
+    response = send(QStringLiteral("packets.query"), {{QStringLiteral("limit"), 10}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), true);
+    const QJsonObject query = response.value(QStringLiteral("data")).toObject();
+    QCOMPARE(query.value(QStringLiteral("count")).toInt(), 0);
+    QCOMPARE(query.value(QStringLiteral("next_offset")).toInt(), -1);
+    QVERIFY(query.value(QStringLiteral("packets")).toArray().isEmpty());
+
+    // statistics.endpoints: the documented six groups (apps, domains, ipv4,
+    // ipv6, tcp, udp) with sorting, pagination, and endpoint objects.
+    response = send(QStringLiteral("statistics.endpoints"),
+                    {{QStringLiteral("group"), QStringLiteral("udp")}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(response.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("group")).toString(), QStringLiteral("udp"));
+    QCOMPARE(response.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("next_offset")).toInt(), -1);
+    response = send(QStringLiteral("statistics.endpoints"),
+                    {{QStringLiteral("group"), QStringLiteral("ipv4")},
+                     {QStringLiteral("sort"), QStringLiteral("address")},
+                     {QStringLiteral("order"), QStringLiteral("asc")}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), true);
+    // The F2 names are gone: upstream documents ipv4/ipv6/tcp/udp.
+    response = send(QStringLiteral("statistics.endpoints"),
+                    {{QStringLiteral("group"), QStringLiteral("ips")}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), false);
+    response = send(QStringLiteral("statistics.endpoints"),
+                    {{QStringLiteral("group"), QStringLiteral("apps")},
+                     {QStringLiteral("sort"), QStringLiteral("bogus")}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), false);
+    QCOMPARE(response.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("code")).toString(), QStringLiteral("invalid_params"));
+    response = send(QStringLiteral("statistics.endpoints"),
+                    {{QStringLiteral("group"), QStringLiteral("apps")},
+                     {QStringLiteral("order"), QStringLiteral("sideways")}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), false);
+
+    qunsetenv("TCPVIEWER_MCP_ENABLED");
+    qunsetenv("TCPVIEWER_MCP_REDACTION");
 }
 
 QTEST_MAIN(AppCommandServerTest)

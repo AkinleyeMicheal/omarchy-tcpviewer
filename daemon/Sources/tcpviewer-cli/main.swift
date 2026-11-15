@@ -115,7 +115,7 @@ func usage() -> Never {
       pane get --pane 0|1 | pane focus --pane 0|1
       tab set-filter --filter TEXT
       overview get
-      statistics endpoints --group apps|domains|ips|clients [--search S] [--limit N]
+      statistics endpoints --group apps|domains|ipv4|ipv6|tcp|udp [--search S] [--sort C] [--order desc|asc] [--offset N] [--limit N]
       packets reveal PACKET_ID
 
     exit codes: 0 success, 2 usage/validation, 3 transport, 4 daemon error

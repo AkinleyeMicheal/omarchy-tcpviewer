@@ -67,7 +67,9 @@ public:
                           const QString &script, int selectTarget);
 
     Q_INVOKABLE bool selectTab(int index);
-    Q_INVOKABLE void newTab();
+    // Creates a tab seeded from the shared workspace; select=false leaves
+    // the current tab selected (MCP create_tab's select parameter).
+    Q_INVOKABLE void newTab(bool select = true);
     // Sidebar rows: scope the new tab to an app/domain/IP node.
     Q_INVOKABLE void openSourceInNewTab(const QString &nodeID);
     // Returns false only when there is a single tab left: the caller closes
@@ -79,6 +81,8 @@ public:
     Q_INVOKABLE void selectNextTab(int delta);
     Q_INVOKABLE void historyStep(int delta);
     Q_INVOKABLE void toggleSplit();
+    // Explicit split state for the active tab (MCP set_split_view).
+    Q_INVOKABLE void setSplit(bool enabled);
     Q_INVOKABLE QString tabID(int index) const;
     // Rename a tab (file imports name the offline tab after the file; CLI
     // tab management can address it later).

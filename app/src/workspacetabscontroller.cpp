@@ -234,7 +234,7 @@ void WorkspaceTabsController::setActiveIndex(int index)
 
 // Create a tab seeded from the shared workspace (upstream ⌘T shows the
 // window's live capture).
-void WorkspaceTabsController::newTab()
+void WorkspaceTabsController::newTab(bool select)
 {
     if (!m_session)
         return;
@@ -242,6 +242,8 @@ void WorkspaceTabsController::newTab()
     entry.captureMode = activeCaptureMode();
     snapshotActive();
     appendEntry(entry);
+    if (!select)
+        return;
     setActiveIndex(m_entries.size() - 1);
     applyEntry(m_activeTab);
     pushHistory(entry.id);
@@ -371,6 +373,17 @@ void WorkspaceTabsController::toggleSplit()
     if (m_activeTab < 0 || m_activeTab >= m_entries.size())
         return;
     m_entries[m_activeTab].splitVisible = !m_entries[m_activeTab].splitVisible;
+    const QModelIndex changed = index(m_activeTab);
+    emit dataChanged(changed, changed, {SplitVisibleRole});
+}
+
+void WorkspaceTabsController::setSplit(bool enabled)
+{
+    if (m_activeTab < 0 || m_activeTab >= m_entries.size())
+        return;
+    if (m_entries[m_activeTab].splitVisible == enabled)
+        return;
+    m_entries[m_activeTab].splitVisible = enabled;
     const QModelIndex changed = index(m_activeTab);
     emit dataChanged(changed, changed, {SplitVisibleRole});
 }

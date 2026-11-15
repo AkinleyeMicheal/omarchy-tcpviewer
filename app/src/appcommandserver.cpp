@@ -12,6 +12,11 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QSettings>
+#ifdef Q_OS_UNIX
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -53,6 +58,69 @@ int tabIndexByID(WorkspaceTabsController *tabs, const QString &tabID)
             return i;
     }
     return -1;
+}
+
+// --- MCP settings (upstream Settings → MCP; the settings UI lands with F4) ---
+
+bool parseBoolText(const QString &text, bool *ok)
+{
+    const QString normalized = text.trimmed().toLower();
+    *ok = normalized == QLatin1String("1") || normalized == QLatin1String("true")
+        || normalized == QLatin1String("yes") || normalized == QLatin1String("on")
+        || normalized == QLatin1String("0") || normalized == QLatin1String("false")
+        || normalized == QLatin1String("no") || normalized == QLatin1String("off");
+    if (!*ok)
+        return false;
+    return normalized == QLatin1String("1") || normalized == QLatin1String("true")
+        || normalized == QLatin1String("yes") || normalized == QLatin1String("on");
+}
+
+// Env overrides (CI/smoke) win over the stored settings.
+bool mcpEnabled()
+{
+    bool ok = false;
+    const QString env = qEnvironmentVariable("TCPVIEWER_MCP_ENABLED");
+    if (!env.isEmpty() && parseBoolText(env, &ok))
+        return ok;
+    return QSettings().value(QStringLiteral("mcp/enabled"), false).toBool();
+}
+
+bool mcpRedaction()
+{
+    bool ok = false;
+    const QString env = qEnvironmentVariable("TCPVIEWER_MCP_REDACTION");
+    if (!env.isEmpty() && parseBoolText(env, &ok))
+        return ok;
+    // Upstream default: keep redaction enabled unless there is a clear reason.
+    return QSettings().value(QStringLiteral("mcp/redaction"), true).toBool();
+}
+
+QString normalizedSettingKey(const QString &key)
+{
+    QString normalized;
+    normalized.reserve(key.size());
+    for (const QChar &character : key) {
+        const char16_t code = character.toLower().unicode();
+        if (code == '-' || code == '_' || code == ' ')
+            continue;
+        normalized.append(QChar(code));
+    }
+    return normalized;
+}
+
+bool isSensitiveKey(const QString &key)
+{
+    static const QSet<QString> sensitive = {
+        QStringLiteral("authorization"), QStringLiteral("proxyauthorization"),
+        QStringLiteral("wwwauthenticate"), QStringLiteral("cookie"),
+        QStringLiteral("setcookie"), QStringLiteral("password"), QStringLiteral("passwd"),
+        QStringLiteral("pwd"), QStringLiteral("secret"), QStringLiteral("token"),
+        QStringLiteral("accesstoken"), QStringLiteral("refreshtoken"),
+        QStringLiteral("idtoken"), QStringLiteral("apikey"), QStringLiteral("privatekey"),
+        QStringLiteral("credential"), QStringLiteral("credentials"),
+        QStringLiteral("sessionkey"), QStringLiteral("authkey"),
+    };
+    return sensitive.contains(normalizedSettingKey(key));
 }
 
 } // namespace
@@ -111,6 +179,21 @@ void AppCommandServer::close()
 void AppCommandServer::handleConnection()
 {
     while (QLocalSocket *socket = m_server.nextPendingConnection()) {
+#ifdef Q_OS_UNIX
+        // Upstream's MCP bridge is localhost-only with a per-launch key; the
+        // runtime-dir socket is already user-scoped, and this check makes the
+        // same guarantee kernel-enforced: only the owning user connects.
+        const qintptr descriptor = socket->socketDescriptor();
+        if (descriptor != -1) {
+            struct ucred credentials {};
+            socklen_t length = sizeof(credentials);
+            if (getsockopt(descriptor, SOL_SOCKET, SO_PEERCRED, &credentials, &length) == 0
+                && credentials.uid != getuid()) {
+                socket->abort();
+                continue;
+            }
+        }
+#endif
         connect(socket, &QLocalSocket::disconnected, socket, &QLocalSocket::deleteLater);
         handleReadyRead(socket);
         connect(socket, &QLocalSocket::readyRead, this, [this, socket]() {
@@ -160,6 +243,30 @@ void AppCommandServer::dispatch(QLocalSocket *socket, const QString &requestID,
     }
     WorkspaceTabsController *tabs = session->tabs();
 
+    // MCP helper connections announce themselves once; the announce both
+    // marks the connection (redaction, confirm policies) and enforces the
+    // Enable MCP Server setting (upstream Settings → MCP).
+    if (command == QLatin1String("mcp.hello")) {
+        if (!mcpEnabled()) {
+            sendError(socket, requestID, command, QStringLiteral("not_enabled"),
+                      QStringLiteral("MCP server is disabled in omarchy-tcpviewer settings"));
+            return;
+        }
+        socket->setProperty("mcp", true);
+        QVariantMap result{
+            {QStringLiteral("app"), QStringLiteral("omarchy-tcpviewer")},
+            {QStringLiteral("protocol"), 1},
+            {QStringLiteral("redaction"), mcpRedaction()},
+        };
+        sendResult(socket, requestID, command, result);
+        return;
+    }
+    if (socket->property("mcp").toBool() && !mcpEnabled()) {
+        sendError(socket, requestID, command, QStringLiteral("not_enabled"),
+                  QStringLiteral("MCP server is disabled in omarchy-tcpviewer settings"));
+        return;
+    }
+
     if (command == QLatin1String("app.status")) {
         QVariantMap result;
         result.insert(QStringLiteral("app"), QStringLiteral("omarchy-tcpviewer"));
@@ -184,11 +291,23 @@ void AppCommandServer::dispatch(QLocalSocket *socket, const QString &requestID,
         return;
     }
     if (command == QLatin1String("tabs.create")) {
-        tabs->newTab();
+        // select=false leaves the current tab selected (MCP create_tab).
+        const bool select = params.value(QStringLiteral("select"), true).toBool();
+        tabs->newTab(select);
         const QString label = params.value(QStringLiteral("label")).toString();
         if (!label.isEmpty())
             tabs->setTabLabel(tabs->count() - 1, label);
         sendResult(socket, requestID, command, tabsRow(tabs, tabs->count() - 1));
+        return;
+    }
+    if (command == QLatin1String("tabs.set_split")) {
+        if (tabs->activeTab() < 0) {
+            sendError(socket, requestID, command, QStringLiteral("app_command_failed"),
+                      QStringLiteral("no active tab"));
+            return;
+        }
+        tabs->setSplit(params.value(QStringLiteral("enabled")).toBool());
+        sendResult(socket, requestID, command, tabsRow(tabs, tabs->activeTab()));
         return;
     }
     if (command == QLatin1String("tabs.select")) {
@@ -290,34 +409,78 @@ void AppCommandServer::dispatch(QLocalSocket *socket, const QString &requestID,
         return;
     }
     if (command == QLatin1String("statistics.endpoints")) {
+        // Documented CLI/MCP groups (command-line.txt §12, docs/mcp §7):
+        // apps, domains, ipv4, ipv6, tcp, udp — the model's group order.
+        static const QHash<QString, EndpointStatisticsModel::Group> groups{
+            {QStringLiteral("apps"), EndpointStatisticsModel::Apps},
+            {QStringLiteral("domains"), EndpointStatisticsModel::Domains},
+            {QStringLiteral("ipv4"), EndpointStatisticsModel::Ipv4},
+            {QStringLiteral("ipv6"), EndpointStatisticsModel::Ipv6},
+            {QStringLiteral("tcp"), EndpointStatisticsModel::Tcp},
+            {QStringLiteral("udp"), EndpointStatisticsModel::Udp}};
+        static const QHash<QString, EndpointStatisticsModel::Column> columns{
+            {QStringLiteral("address"), EndpointStatisticsModel::Address},
+            {QStringLiteral("port"), EndpointStatisticsModel::Port},
+            {QStringLiteral("protocol"), EndpointStatisticsModel::ProtocolName},
+            {QStringLiteral("client"), EndpointStatisticsModel::Client},
+            {QStringLiteral("domain"), EndpointStatisticsModel::Domain},
+            {QStringLiteral("packets"), EndpointStatisticsModel::Packets},
+            {QStringLiteral("bytes"), EndpointStatisticsModel::Bytes},
+            {QStringLiteral("tx_packets"), EndpointStatisticsModel::TxPackets},
+            {QStringLiteral("tx_bytes"), EndpointStatisticsModel::TxBytes},
+            {QStringLiteral("rx_packets"), EndpointStatisticsModel::RxPackets},
+            {QStringLiteral("rx_bytes"), EndpointStatisticsModel::RxBytes},
+            {QStringLiteral("summary"), EndpointStatisticsModel::Summary}};
         EndpointStatisticsModel *stats = session->endpointStats();
         const QString group = params.value(QStringLiteral("group"), QStringLiteral("apps")).toString();
-        const QHash<QString, int> groups{
-            {QStringLiteral("apps"), 0}, {QStringLiteral("domains"), 1},
-            {QStringLiteral("ips"), 2}, {QStringLiteral("clients"), 3}};
         if (!groups.contains(group)) {
             sendError(socket, requestID, command, QStringLiteral("invalid_params"),
                       QStringLiteral("unknown group"));
             return;
         }
+        const QString sort = params.value(QStringLiteral("sort"), QStringLiteral("bytes")).toString();
+        if (!columns.contains(sort)) {
+            sendError(socket, requestID, command, QStringLiteral("invalid_params"),
+                      QStringLiteral("unknown sort column"));
+            return;
+        }
+        const QString order = params.value(QStringLiteral("order"), QStringLiteral("desc")).toString();
+        if (order != QLatin1String("desc") && order != QLatin1String("asc")) {
+            sendError(socket, requestID, command, QStringLiteral("invalid_params"),
+                      QStringLiteral("order must be desc or asc"));
+            return;
+        }
         stats->setGroup(groups.value(group));
+        stats->setSortOrder(columns.value(sort), order == QLatin1String("asc"));
         stats->setSearchText(params.value(QStringLiteral("search")).toString());
         stats->rebuild(session->packets());
-        QVariantList rows;
         int limit = params.value(QStringLiteral("limit"), 50).toInt();
-        limit = qBound(1, limit, 1000);
-        for (int row = 0; row < stats->count() && rows.size() < limit; ++row) {
+        limit = qBound(1, limit, 500); // upstream: a page holds at most 500 rows
+        int offset = qMax(0, params.value(QStringLiteral("offset"), 0).toInt());
+        QVariantList rows;
+        int row = offset;
+        for (; row < stats->count() && rows.size() < limit; ++row) {
             QVariantMap entry;
             entry.insert(QStringLiteral("key"), stats->keyAt(row));
+            // Value columns answer their custom roles (DisplayRole is for the
+            // QML table's painted cells); the Role enum parallels Column.
             for (int column = 0; column < stats->columnCount(); ++column) {
                 entry.insert(stats->columnJsonKey(column),
-                             stats->data(stats->index(row, column), Qt::DisplayRole));
+                             stats->data(stats->index(row, column),
+                                         EndpointStatisticsModel::AddressRole + column));
             }
+            // The endpoint object passes to pane targeting (upstream §7).
+            entry.insert(QStringLiteral("endpoint"), QVariantMap{
+                {QStringLiteral("group"), group},
+                {QStringLiteral("key"), stats->keyAt(row)}});
             rows.append(entry);
         }
         QVariantMap result;
         result.insert(QStringLiteral("group"), group);
         result.insert(QStringLiteral("count"), stats->count());
+        result.insert(QStringLiteral("offset"), offset);
+        result.insert(QStringLiteral("next_offset"),
+                      row < stats->count() ? row : -1);
         result.insert(QStringLiteral("rows"), rows);
         sendResult(socket, requestID, command, result);
         return;
@@ -334,6 +497,47 @@ void AppCommandServer::dispatch(QLocalSocket *socket, const QString &requestID,
             {QStringLiteral("packet_id"), packetID}});
         return;
     }
+    if (command == QLatin1String("packets.query")) {
+        // Bounded window over the pane's loaded packet rows (the same rows
+        // the packet table shows). Rows beyond the loaded page arrive with
+        // the next table page; the daemon fetches on demand.
+        PacketListModel *packets = session->packets();
+        int limit = params.value(QStringLiteral("limit"), 50).toInt();
+        limit = qBound(1, limit, 500);
+        const int offset = qMax(0, params.value(QStringLiteral("offset"), 0).toInt());
+        QVariantList rows;
+        int row = offset;
+        for (; row < packets->count() && rows.size() < limit; ++row) {
+            const QVariantMap snapshot = packets->rowSnapshotAt(row);
+            rows.append(QVariantMap{
+                {QStringLiteral("packet_id"), snapshot.value(QStringLiteral("packetId"))},
+                {QStringLiteral("number"), snapshot.value(QStringLiteral("number"))},
+                {QStringLiteral("time"), snapshot.value(QStringLiteral("timeText"))},
+                {QStringLiteral("source"), snapshot.value(QStringLiteral("source"))},
+                {QStringLiteral("source_port"), snapshot.value(QStringLiteral("sourcePort"))},
+                {QStringLiteral("destination"), snapshot.value(QStringLiteral("destination"))},
+                {QStringLiteral("destination_port"), snapshot.value(QStringLiteral("destinationPort"))},
+                {QStringLiteral("protocol"), snapshot.value(QStringLiteral("protocol"))},
+                {QStringLiteral("client"), snapshot.value(QStringLiteral("client"))},
+                {QStringLiteral("domain"), snapshot.value(QStringLiteral("domain"))},
+                {QStringLiteral("stream_id"), snapshot.value(QStringLiteral("streamId"))},
+                {QStringLiteral("summary"), snapshot.value(QStringLiteral("summary"))},
+                {QStringLiteral("length"), snapshot.value(QStringLiteral("length"))},
+                {QStringLiteral("severity"), snapshot.value(QStringLiteral("severity"))},
+                {QStringLiteral("decode_status"), snapshot.value(QStringLiteral("decodeStatus"))},
+                {QStringLiteral("comment"), snapshot.value(QStringLiteral("comment"))},
+            });
+        }
+        QVariantMap result;
+        result.insert(QStringLiteral("count"), packets->count());
+        result.insert(QStringLiteral("total_count"), packets->totalCount());
+        result.insert(QStringLiteral("offset"), offset);
+        result.insert(QStringLiteral("next_offset"),
+                      row < packets->count() ? row : -1);
+        result.insert(QStringLiteral("packets"), rows);
+        sendResult(socket, requestID, command, result);
+        return;
+    }
     sendError(socket, requestID, command, QStringLiteral("unknown_command"),
               QStringLiteral("unknown command %1").arg(command));
 }
@@ -341,12 +545,17 @@ void AppCommandServer::dispatch(QLocalSocket *socket, const QString &requestID,
 void AppCommandServer::sendResult(QLocalSocket *socket, const QString &requestID,
                                   const QString &command, const QVariant &result)
 {
+    QVariant data = result;
+    // MCP connections get the redaction pass (upstream "Redact Sensitive Data
+    // Before Sending to AI"); CLI connections are unaffected.
+    if (socket->property("mcp").toBool() && mcpRedaction())
+        redactValue(data);
     QJsonObject response{
         {QStringLiteral("schema_version"), 1},
         {QStringLiteral("request_id"), requestID},
         {QStringLiteral("ok"), true},
         {QStringLiteral("command"), command},
-        {QStringLiteral("data"), QJsonValue::fromVariant(result)},
+        {QStringLiteral("data"), QJsonValue::fromVariant(data)},
     };
     socket->write(QJsonDocument(response).toJson(QJsonDocument::Compact) + '\n');
     socket->flush();
@@ -367,4 +576,30 @@ void AppCommandServer::sendError(QLocalSocket *socket, const QString &requestID,
     };
     socket->write(QJsonDocument(response).toJson(QJsonDocument::Compact) + '\n');
     socket->flush();
+}
+
+void AppCommandServer::redactValue(QVariant &value)
+{
+    switch (value.metaType().id()) {
+    case QMetaType::QVariantMap: {
+        QVariantMap map = value.toMap();
+        for (auto it = map.begin(); it != map.end(); ++it) {
+            if (isSensitiveKey(it.key()))
+                it.value() = QStringLiteral("[redacted]");
+            else
+                redactValue(it.value());
+        }
+        value = map;
+        return;
+    }
+    case QMetaType::QVariantList: {
+        QVariantList list = value.toList();
+        for (QVariant &entry : list)
+            redactValue(entry);
+        value = list;
+        return;
+    }
+    default:
+        return;
+    }
 }

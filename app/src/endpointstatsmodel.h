@@ -157,6 +157,10 @@ public:
     // Header click: same column toggles direction, a new column starts with
     // the AppKit prototype (numeric descending, text ascending).
     Q_INVOKABLE void clickSort(int column);
+
+    // Programmatic sort (MCP get_endpoint_statistics sort/order): writes the
+    // active group's sort state; rebuild() applies it.
+    void setSortOrder(int column, bool ascending);
     // Column catalog so QML and the exporters share titles/defaults.
     Q_INVOKABLE static QString columnTitle(int column);
     Q_INVOKABLE static QString columnJsonKey(int column);

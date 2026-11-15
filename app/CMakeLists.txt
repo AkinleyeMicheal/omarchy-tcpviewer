@@ -36,6 +36,14 @@ qt_add_executable(omarchy-tcpviewer
 target_link_libraries(omarchy-tcpviewer PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Network)
 target_include_directories(omarchy-tcpviewer PRIVATE src)
 
+# MCP stdio helper (upstream tcpviewer-mcp): a separate binary AI clients
+# register (claude mcp add --transport stdio -- tcpviewer -- <path>); it
+# forwards tool calls to the running app's command bridge.
+qt_add_executable(omarchy-tcpviewer-mcp
+    src/mcpserver_main.cpp
+)
+target_link_libraries(omarchy-tcpviewer-mcp PRIVATE Qt6::Core Qt6::Network)
+
 # Keep the module resource tree flat: qml/Main.qml -> Main.qml.
 set_source_files_properties(qml/Main.qml PROPERTIES QT_RESOURCE_ALIAS Main.qml)
 set_source_files_properties(qml/PacketTableListView.qml PROPERTIES QT_RESOURCE_ALIAS PacketTableListView.qml)
@@ -196,4 +204,25 @@ if(TCPVIEWER_BUILD_TESTS)
     target_include_directories(appcommandserver_test PRIVATE src)
     target_link_libraries(appcommandserver_test PRIVATE Qt6::Test Qt6::Qml Qt6::Gui Qt6::Network)
     add_test(NAME appcommandserver COMMAND appcommandserver_test)
+
+    qt_add_executable(mcphelper_test
+        tests/mcphelper_test.cpp
+        src/workspacetabscontroller.cpp
+        src/appcommandserver.cpp
+        src/endpointstatsmodel.cpp
+        src/sessioncontroller.cpp
+        src/daemonclient.cpp
+        src/packetmodel.cpp
+        src/sourcetreemodel.cpp
+        src/packetcolumnlayout.cpp
+        src/packetcustomcolumns.cpp
+        src/pinstore.cpp
+        src/savedpacketstore.cpp
+    )
+    target_include_directories(mcphelper_test PRIVATE src)
+    target_link_libraries(mcphelper_test PRIVATE Qt6::Test Qt6::Qml Qt6::Gui Qt6::Network)
+    add_test(NAME mcphelper COMMAND mcphelper_test)
+    # The helper integration test drives the built binary.
+    set_tests_properties(mcphelper PROPERTIES ENVIRONMENT
+        "MCP_HELPER=$<TARGET_FILE:omarchy-tcpviewer-mcp>")
 endif()

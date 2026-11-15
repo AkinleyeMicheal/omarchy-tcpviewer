@@ -37,6 +37,11 @@ public:
     Q_INVOKABLE bool listen();
     Q_INVOKABLE void close();
 
+    // MCP redaction scrubber (upstream "Redact Sensitive Data Before Sending
+    // to AI"): values under sensitive keys become "[redacted]"; the scrub
+    // recurses through maps and lists. Public for the bridge tests.
+    static void redactValue(QVariant &value);
+
 signals:
     void socketPathChanged();
     // packets reveal: QML brings the window forward and presents the packet.
