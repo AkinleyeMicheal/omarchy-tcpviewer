@@ -22,6 +22,7 @@ qt_add_executable(omarchy-tcpviewer
     src/endpointstatsmodel.cpp
     src/benchmark.cpp
     src/daemonclient.cpp
+    src/appsettings.cpp
     src/sessioncontroller.cpp
     src/workspacetabscontroller.cpp
     src/appcommandserver.cpp
@@ -76,6 +77,7 @@ qt_add_qml_module(omarchy-tcpviewer
     QML_FILES
         qml/Main.qml
         qml/Theme.qml
+        qml/SettingsWindow.qml
         qml/Overview.qml
         qml/OverviewCard.qml
         qml/OverviewTimeChart.qml
@@ -96,6 +98,7 @@ qt_add_qml_module(omarchy-tcpviewer
         qml/EndpointStatisticsWindow.qml
         qml/DiffWindow.qml
     SOURCES
+        src/appsettings.h
         src/packetmodel.h
         src/sourcetreemodel.h
         src/packetcolumnlayout.h
@@ -182,6 +185,7 @@ if(TCPVIEWER_BUILD_TESTS)
         src/packetcustomcolumns.cpp
         src/pinstore.cpp
         src/savedpacketstore.cpp
+        src/appsettings.cpp
     )
     target_include_directories(workspacetabscontroller_test PRIVATE src)
     target_link_libraries(workspacetabscontroller_test PRIVATE Qt6::Test Qt6::Qml Qt6::Gui Qt6::Network)
@@ -200,6 +204,7 @@ if(TCPVIEWER_BUILD_TESTS)
         src/packetcustomcolumns.cpp
         src/pinstore.cpp
         src/savedpacketstore.cpp
+        src/appsettings.cpp
     )
     target_include_directories(appcommandserver_test PRIVATE src)
     target_link_libraries(appcommandserver_test PRIVATE Qt6::Test Qt6::Qml Qt6::Gui Qt6::Network)
@@ -218,6 +223,7 @@ if(TCPVIEWER_BUILD_TESTS)
         src/packetcustomcolumns.cpp
         src/pinstore.cpp
         src/savedpacketstore.cpp
+        src/appsettings.cpp
     )
     target_include_directories(mcphelper_test PRIVATE src)
     target_link_libraries(mcphelper_test PRIVATE Qt6::Test Qt6::Qml Qt6::Gui Qt6::Network)
@@ -225,4 +231,13 @@ if(TCPVIEWER_BUILD_TESTS)
     # The helper integration test drives the built binary.
     set_tests_properties(mcphelper PROPERTIES ENVIRONMENT
         "MCP_HELPER=$<TARGET_FILE:omarchy-tcpviewer-mcp>")
+
+    # AppSettings: the six documented keys, validation, reset, env overrides.
+    qt_add_executable(appsettings_test
+        tests/appsettings_test.cpp
+        src/appsettings.cpp
+    )
+    target_include_directories(appsettings_test PRIVATE src)
+    target_link_libraries(appsettings_test PRIVATE Qt6::Test Qt6::Qml Qt6::Gui)
+    add_test(NAME appsettings COMMAND appsettings_test)
 endif()

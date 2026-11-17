@@ -1,5 +1,6 @@
 #include "appcommandserver.h"
 
+#include "appsettings.h"
 #include "endpointstatsmodel.h"
 #include "packetmodel.h"
 #include "sessioncontroller.h"
@@ -12,7 +13,6 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
-#include <QSettings>
 #ifdef Q_OS_UNIX
 #include <sys/socket.h>
 #include <unistd.h>
@@ -60,39 +60,20 @@ int tabIndexByID(WorkspaceTabsController *tabs, const QString &tabID)
     return -1;
 }
 
-// --- MCP settings (upstream Settings → MCP; the settings UI lands with F4) ---
+// --- MCP settings (upstream Settings -> MCP; the shared store lives in
+// AppSettings so the settings UI, the bridge, and Theme.qml agree) ---
 
-bool parseBoolText(const QString &text, bool *ok)
-{
-    const QString normalized = text.trimmed().toLower();
-    *ok = normalized == QLatin1String("1") || normalized == QLatin1String("true")
-        || normalized == QLatin1String("yes") || normalized == QLatin1String("on")
-        || normalized == QLatin1String("0") || normalized == QLatin1String("false")
-        || normalized == QLatin1String("no") || normalized == QLatin1String("off");
-    if (!*ok)
-        return false;
-    return normalized == QLatin1String("1") || normalized == QLatin1String("true")
-        || normalized == QLatin1String("yes") || normalized == QLatin1String("on");
-}
-
-// Env overrides (CI/smoke) win over the stored settings.
+// Env overrides (CI/smoke) win over the stored settings. The effective values
+// come from AppSettings (the shared settings store; the settings UI and the
+// bridge's settings.* commands use it too).
 bool mcpEnabled()
 {
-    bool ok = false;
-    const QString env = qEnvironmentVariable("TCPVIEWER_MCP_ENABLED");
-    if (!env.isEmpty() && parseBoolText(env, &ok))
-        return ok;
-    return QSettings().value(QStringLiteral("mcp/enabled"), false).toBool();
+    return AppSettings::instance()->mcpEnabled();
 }
 
 bool mcpRedaction()
 {
-    bool ok = false;
-    const QString env = qEnvironmentVariable("TCPVIEWER_MCP_REDACTION");
-    if (!env.isEmpty() && parseBoolText(env, &ok))
-        return ok;
-    // Upstream default: keep redaction enabled unless there is a clear reason.
-    return QSettings().value(QStringLiteral("mcp/redaction"), true).toBool();
+    return AppSettings::instance()->mcpRedaction();
 }
 
 QString normalizedSettingKey(const QString &key)
@@ -242,6 +223,7 @@ void AppCommandServer::dispatch(QLocalSocket *socket, const QString &requestID,
         return;
     }
     WorkspaceTabsController *tabs = session->tabs();
+    AppSettings *settingsStore = AppSettings::instance();
 
     // MCP helper connections announce themselves once; the announce both
     // marks the connection (redaction, confirm policies) and enforces the
@@ -536,6 +518,67 @@ void AppCommandServer::dispatch(QLocalSocket *socket, const QString &requestID,
                       row < packets->count() ? row : -1);
         result.insert(QStringLiteral("packets"), rows);
         sendResult(socket, requestID, command, result);
+        return;
+    }
+    if (command == QLatin1String("settings.list")) {
+        // The documented keys with their current (env-adjusted) values.
+        QVariantMap values;
+        for (const QString &key : AppSettings::settingKeys())
+            values.insert(key, settingsStore->settingValue(key));
+        sendResult(socket, requestID, command, QVariantMap{
+            {QStringLiteral("settings"), values}});
+        return;
+    }
+    if (command == QLatin1String("settings.get")) {
+        const QString key = params.value(QStringLiteral("key")).toString();
+        if (!AppSettings::settingKeys().contains(key)) {
+            sendError(socket, requestID, command, QStringLiteral("invalid_setting"),
+                      QStringLiteral("unknown setting: %1").arg(key));
+            return;
+        }
+        sendResult(socket, requestID, command, QVariantMap{
+            {QStringLiteral("key"), key},
+            {QStringLiteral("value"), settingsStore->settingValue(key)}});
+        return;
+    }
+    if (command == QLatin1String("settings.set")) {
+        const QString key = params.value(QStringLiteral("key")).toString();
+        QString error;
+        if (!settingsStore->setSettingValue(key, params.value(QStringLiteral("value")), &error)) {
+            const bool unknown = !AppSettings::settingKeys().contains(key);
+            sendError(socket, requestID, command,
+                      unknown ? QStringLiteral("invalid_setting") : QStringLiteral("invalid_value"),
+                      error);
+            return;
+        }
+        sendResult(socket, requestID, command, QVariantMap{
+            {QStringLiteral("key"), key},
+            {QStringLiteral("value"), settingsStore->settingValue(key)}});
+        return;
+    }
+    if (command == QLatin1String("settings.reset")) {
+        // Upstream asks for --yes on the bulk form; the bridge enforces the
+        // same confirm gate for every client.
+        const bool all = params.value(QStringLiteral("all")).toBool();
+        if (all) {
+            if (!params.value(QStringLiteral("confirm")).toBool()) {
+                sendError(socket, requestID, command, QStringLiteral("confirm_required"),
+                          QStringLiteral("confirm=true required to reset every setting"));
+                return;
+            }
+            sendResult(socket, requestID, command, QVariantMap{
+                {QStringLiteral("reset"), settingsStore->resetAll()}});
+            return;
+        }
+        const QString key = params.value(QStringLiteral("key")).toString();
+        QString error;
+        if (!settingsStore->resetSettingValue(key, &error)) {
+            sendError(socket, requestID, command, QStringLiteral("invalid_setting"), error);
+            return;
+        }
+        sendResult(socket, requestID, command, QVariantMap{
+            {QStringLiteral("key"), key},
+            {QStringLiteral("value"), settingsStore->settingValue(key)}});
         return;
     }
     sendError(socket, requestID, command, QStringLiteral("unknown_command"),

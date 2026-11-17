@@ -191,7 +191,7 @@ Item {
                         anchors.centerIn: parent
                         text: cell.text
                         color: Theme.protocolTint(row.protocol)
-                        font.family: Theme.monoFont
+                        font.family: Theme.packetTextFont
                         font.pixelSize: Theme.packetFontSize
                         font.weight: Font.DemiBold
                     }
@@ -207,7 +207,7 @@ Item {
                         color: cell.isSummary && row.severity !== 0
                                ? Theme.systemOrange
                                : (Theme.isSecondary(cell.modelData.role) ? Theme.secondaryLabel : Theme.label)
-                        font.family: Theme.monoFont
+                        font.family: Theme.packetTextFont
                         font.pixelSize: Theme.packetFontSize
                     }
                 }

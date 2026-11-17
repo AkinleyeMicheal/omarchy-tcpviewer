@@ -29,6 +29,22 @@ ApplicationWindow {
         session.tabs.setActiveCaptureMode(mode)
     }
 
+    // Quit flow: quit_confirmation (upstream quit_confirmation) asks before
+    // leaving, from both the Ctrl+Q action and the window close button.
+    function requestQuit() {
+        if (session.settings.quitConfirmation)
+            quitConfirmDialog.open()
+        else
+            Qt.quit()
+    }
+
+    onClosing: function (close) {
+        if (session.settings.quitConfirmation) {
+            close.accepted = false
+            quitConfirmDialog.open()
+        }
+    }
+
     // Focused workspace routes inspector fetches (per-pane selection state).
     property string focusedPaneID: "0:0"
 
@@ -50,7 +66,8 @@ ApplicationWindow {
     Action { id: tab7Action; shortcut: "Ctrl+Shift+7"; onTriggered: session.tabs.selectTab(6) }
     Action { id: tab8Action; shortcut: "Ctrl+Shift+8"; onTriggered: session.tabs.selectTab(7) }
     Action { id: tab9Action; shortcut: "Ctrl+Shift+9"; onTriggered: session.tabs.selectTab(8) }
-    Action { id: quitAction; shortcut: "Ctrl+Q"; onTriggered: Qt.quit() }
+    Action { id: quitAction; shortcut: "Ctrl+Q"; onTriggered: window.requestQuit() }
+    Action { id: settingsAction; shortcut: "Ctrl+,"; onTriggered: settingsWindow.openAndRaise() }
     Action { id: focusFilterAction; shortcut: "Ctrl+F"; onTriggered: window.focusDisplayFilter() }
     Action { id: focusInspectorFilterAction; shortcut: "Ctrl+Alt+F"; onTriggered: window.focusInspectorFilter() }
     Action { id: focusSidebarFilterAction; shortcut: "Ctrl+Shift+F"; onTriggered: sidebar.focusFilter() }
@@ -133,6 +150,11 @@ ApplicationWindow {
 
         Menu {
             title: qsTr("&Edit")
+            MenuItem {
+                text: qsTr("Settings…")
+                action: settingsAction
+            }
+            MenuSeparator {}
             MenuItem {
                 text: qsTr("Filter")
                 action: focusFilterAction
@@ -1666,6 +1688,26 @@ ApplicationWindow {
         }
     }
 
+    SettingsWindow {
+        id: settingsWindow
+        visible: false
+        session: session
+    }
+
+    // Quit confirmation (upstream quit_confirmation): yes quits, no stays.
+    Dialog {
+        id: quitConfirmDialog
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        title: qsTr("Quit Omarchy TCPViewer?")
+        standardButtons: Dialog.Yes | Dialog.No
+        Label {
+            text: qsTr("Quit the viewer and stop the running capture?")
+            color: Theme.label
+        }
+        onAccepted: Qt.quit()
+    }
+
     Component.onCompleted: {
         // CI/screenshot hooks: window size, seeded tabs + scripted ops.
         if (session.startupWindowWidth > 0)
@@ -1681,6 +1723,9 @@ ApplicationWindow {
             diffTimer.start()
         if (bench.enabled)
             bench.start(session.packets, window)
+        // CI/screenshot hook: the settings window for the settings cluster.
+        if (session.envValue("TCPVIEWER_OPEN_SETTINGS") !== "")
+            settingsWindow.openAndRaise()
     }
 
     Timer {

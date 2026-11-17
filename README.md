@@ -250,17 +250,34 @@ page header.
   `get_pane`, `set_split_view`, `focus_pane`, `get_overview_statistics`,
   `get_endpoint_statistics`, `query_packets` (the pane's loaded packet
   page), and `reveal_packet`.
-- Two settings control it (Settings UI lands with the settings cluster;
-  today they live in `~/.config/omarchy-tcpviewer/Omarchy TCPViewer.ini`
-  under `[mcp]`): `enabled=false` refuses every tool call with a
-  "disabled in omarchy-tcpviewer settings" error, and `redaction=true`
-  (the default, matching upstream) scrubs sensitive values
-  (authorization, cookies, tokens, credentials, private keys, api keys)
-  from everything the bridge sends to the MCP client. `TCPVIEWER_MCP_ENABLED`
-  / `TCPVIEWER_MCP_REDACTION` environment overrides exist for CI.
+- Two settings control it from the Settings window (Edit → Settings…): the
+  "Enable MCP server" toggle stores `enabled` (`[mcp] enabled=false` refuses
+  every tool call with a "disabled in omarchy-tcpviewer settings" error), and
+  "Redact sensitive data before sending to AI" stores `redaction=true` (the
+  default, matching upstream), which scrubs sensitive values (authorization,
+  cookies, tokens, credentials, private keys, api keys) from everything the
+  bridge sends to the MCP client. Both live in
+  `~/.config/omarchy-tcpviewer/Omarchy TCPViewer.conf` under `[mcp]`; the CLI's
+  `settings` group reads and writes them too, and `TCPVIEWER_MCP_ENABLED` /
+  `TCPVIEWER_MCP_REDACTION` environment overrides exist for CI.
 - Packet details, packet bytes, stream following, capture control, and
   import/export MCP tools are upstream's surface but not wired yet; the CLI
   and the app UI cover those operations directly.
+
+## Settings
+
+- Edit → Settings… (Ctrl+,) opens the settings window: Theme (System / Light
+  / Dark, matching upstream's theme setting), Packet font size (10-24),
+  Monospaced packet text, Ask before quitting (upstream's quit_confirmation),
+  and the two MCP toggles. Everything applies live and persists per-user in
+  QSettings — the running capture, open tabs, and the loaded workspace are
+  never touched.
+- The CLI mirrors the same keys (upstream command-line contract):
+  `settings list [--pretty]`, `settings get KEY`, `settings set KEY VALUE`,
+  and `settings reset KEY` / `settings reset --all --yes`. Booleans accept
+  `true/false`, `yes/no`, `on/off`, and `1/0`; invalid keys and values exit
+  4 with a description. Upstream's analytics and crash_reports keys are
+  upstream telemetry and have no port equivalent (known N/A).
 
 ## Live capture
 

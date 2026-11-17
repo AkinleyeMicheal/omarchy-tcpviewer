@@ -43,6 +43,7 @@ let twoWordCommands: Set<String> = [
     "tabs.list", "tabs.create", "tabs.select", "tabs.move", "tabs.close",
     "pane.get", "pane.focus", "tab.set_filter",
     "overview.get", "statistics.endpoints", "packets.reveal",
+    "settings.list", "settings.get", "settings.set", "settings.reset",
 ]
 
 // App-side commands route to the app bridge socket (workspace state lives in
@@ -52,6 +53,7 @@ let appCommands: Set<String> = [
     "tabs.close_others", "tabs.close_right",
     "pane.get", "pane.focus", "tab.set_filter",
     "overview.get", "statistics.endpoints", "packets.reveal",
+    "settings.list", "settings.get", "settings.set", "settings.reset",
 ]
 
 // Positional argument mapping for upstream's "COMMAND ID" forms.
@@ -65,6 +67,9 @@ let positionalKeys: [String: [String]] = [
     "file.export_session": ["path"],
     "source.close": ["source_id"],
     "packets.reveal": ["packet_id"],
+    "settings.get": ["key"],
+    "settings.set": ["key", "value"],
+    "settings.reset": ["key"],
 ]
 
 // Long operations inherit upstream's 300 s timeout (import/export/follow).
@@ -117,6 +122,15 @@ func usage() -> Never {
       overview get
       statistics endpoints --group apps|domains|ipv4|ipv6|tcp|udp [--search S] [--sort C] [--order desc|asc] [--offset N] [--limit N]
       packets reveal PACKET_ID
+      settings list | settings get KEY | settings set KEY VALUE
+      settings reset KEY | settings reset --all --yes
+                                        Supported keys (upstream Settings):
+                                        theme system|light|dark,
+                                        packet_font_size 10-24,
+                                        monospaced_font, quit_confirmation,
+                                        mcp_enabled, mcp_redaction.
+                                        Booleans accept true/false, yes/no,
+                                        on/off, 1/0.
 
     exit codes: 0 success, 2 usage/validation, 3 transport, 4 daemon error
     """
@@ -315,6 +329,10 @@ func buildAppRequest(args: CLIArguments) -> (command: String, envelope: [String:
                     || args.flags[key.replacingOccurrences(of: "_", with: "-")] != nil {
                     continue
                 }
+                // The bulk reset form targets every setting, not one key.
+                if command == "settings.reset" && args.flags["all"] != nil {
+                    continue
+                }
                 fail("missing argument: \(key.replacingOccurrences(of: "_", with: " "))", code: 2)
             }
         }
@@ -341,6 +359,22 @@ func buildAppRequest(args: CLIArguments) -> (command: String, envelope: [String:
         }
         if others { effective = "tabs.close_others" }
         if right { effective = "tabs.close_right" }
+    }
+
+    // settings reset --all mirrors upstream's destructive bulk form and needs
+    // --yes (the bridge enforces the same gate as confirm=true).
+    if command == "settings.reset" {
+        let all = params["all"]?.boolValue == true
+        let yes = params["yes"]?.boolValue == true
+        params.removeValue(forKey: "yes")
+        if all {
+            guard yes else {
+                fail("settings reset --all requires --yes", code: 2)
+            }
+            params["confirm"] = .bool(true)
+        } else if params["key"] == nil {
+            fail("settings reset needs a KEY (or --all --yes)", code: 2)
+        }
     }
 
     let envelope: [String: IPCValue] = [
@@ -434,6 +468,16 @@ func renderText(command: String, data: [String: IPCValue]) -> String {
                 + displaySafe(obj["info"]?.stringValue ?? "")
         }
         return out
+    case "settings.list":
+        guard let values = data["settings"]?.objectValue else { return "" }
+        var out = pad("KEY", 20) + "VALUE"
+        for (key, value) in values {
+            out += "\n" + pad(key, 20) + scalarText(value)
+        }
+        return out
+    case "settings.get":
+        let key = data["key"]?.stringValue ?? ""
+        return pad("KEY", 20) + "VALUE\n" + pad(key, 20) + scalarText(data["value"])
     default:
         return ""
     }
@@ -449,6 +493,7 @@ func scalarText(_ value: IPCValue?) -> String {
     case .string(let text): return text
     case .int(let number): return String(number)
     case .double(let number): return String(number)
+    case .bool(let flag): return flag ? "true" : "false"
     default: return ""
     }
 }

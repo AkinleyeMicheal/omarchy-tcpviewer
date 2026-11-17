@@ -94,6 +94,9 @@ QtObject {
     // Typography (SF Pro -> Inter, SF Mono -> JetBrainsMono Nerd Font).
     readonly property string uiFont: "Inter"
     readonly property string monoFont: "JetBrainsMono Nerd Font"
+    // Packet table + inspector text family: the monospaced_font setting
+    // (upstream Settings) swaps in the proportional UI font when off.
+    readonly property string packetTextFont: AppSettings.monospacedFont ? monoFont : uiFont
     // Canvas's font parser wants a family that fontconfig can resolve; the
     // regular UI falls back from Inter silently, but Canvas warns on every
     // paint. Liberation Sans is present on Omarchy/Arch and is the fallback.
@@ -101,7 +104,8 @@ QtObject {
     readonly property int uiSize: 13
     readonly property int uiSmall: 11
     readonly property int uiTitle: 19
-    readonly property int packetFontSize: 12
+    // packetFontSize is the upstream 10-24 setting (Settings window).
+    readonly property int packetFontSize: AppSettings.packetFontSize
     readonly property int packetRowHeight: 24
 
     // Layout metrics.

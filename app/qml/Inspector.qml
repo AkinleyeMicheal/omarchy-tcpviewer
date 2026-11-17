@@ -186,7 +186,7 @@ Rectangle {
                         text: row.value !== "" ? row.name + ": " + row.value : row.name
                                 textFormat: Text.PlainText
                         elide: Text.ElideRight
-                        font.family: Theme.monoFont
+                        font.family: Theme.packetTextFont
                         font.pixelSize: Theme.packetFontSize
                         font.weight: row.kind === "layer"
                             ? (row.depth === 0 ? Font.Bold : Font.DemiBold)

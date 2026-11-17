@@ -426,7 +426,7 @@ Item {
                     text: cell.cellText
                     textFormat: Text.PlainText
                     color: Theme.protocolTint(model.protocol)
-                    font.family: Theme.monoFont
+                    font.family: Theme.packetTextFont
                     font.pixelSize: Theme.packetFontSize
                     font.weight: Font.DemiBold
                 }
@@ -444,7 +444,7 @@ Item {
                 color: cell.isSummary && model.severity !== 0
                     ? Theme.systemOrange
                     : (cell.isSecondary ? Theme.secondaryLabel : Theme.label)
-                font.family: Theme.monoFont
+                font.family: Theme.packetTextFont
                 font.pixelSize: Theme.packetFontSize
                 font.strikeout: cell.rowStrikethrough
             }

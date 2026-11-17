@@ -2,6 +2,7 @@
 // requests for workspace tabs, panes, Overview, endpoint statistics, and
 // packet reveal, against a seeded WorkspaceTabsController.
 #include "appcommandserver.h"
+#include "appsettings.h"
 #include "sessioncontroller.h"
 
 #include <QDir>
@@ -9,6 +10,7 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QLocalSocket>
+#include <QSettings>
 #include <QSignalSpy>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -21,6 +23,7 @@ class AppCommandServerTest : public QObject
 
 private slots:
     void initTestCase();
+    void init();
     void appStatus();
     void tabsListAndLifecycle();
     void tabFilterAndPane();
@@ -28,6 +31,9 @@ private slots:
     void packetsReveal();
     void closeFlavorsDefaultToActiveTab();
     void unknownCommandAndLastTabClose();
+    void settingsListAndGet();
+    void settingsSetValidation();
+    void settingsSetAndReset();
     // MCP cases last: a successful mcp.hello marks the shared connection,
     // which would leak the MCP gate into the other cases.
     void mcpHandshakeAndRedaction();
@@ -45,6 +51,13 @@ private:
 
 void AppCommandServerTest::initTestCase()
 {
+    // Settings writes must never reach the developer's real config.
+    QCoreApplication::setOrganizationName(QStringLiteral("tcpviewer-apptest"));
+    QCoreApplication::setApplicationName(QStringLiteral("omarchy-tcpviewer"));
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
+                       QDir::temp().filePath(QStringLiteral("tcpviewer-apptest-%1")
+                                                 .arg(QCoreApplication::applicationPid())));
+
     m_session = new SessionController(this);
     // Seed the workspace without start(): no daemon traffic, no capture.
     m_session->tabs()->seed(2, false, QStringLiteral("packets"), QString(), -1);
@@ -58,6 +71,15 @@ void AppCommandServerTest::initTestCase()
     m_socket = new QLocalSocket(this);
     m_socket->connectToServer(m_path);
     QVERIFY(m_socket->waitForConnected(2000));
+}
+
+void AppCommandServerTest::init()
+{
+    // The settings store is a process-wide singleton; restore the defaults so
+    // cases cannot leak state into each other (the MCP gate depends on it).
+    AppSettings::instance()->resetAll();
+    qunsetenv("TCPVIEWER_MCP_ENABLED");
+    qunsetenv("TCPVIEWER_MCP_REDACTION");
 }
 
 void AppCommandServerTest::request(const QJsonObject &json, QJsonObject *out)
@@ -250,6 +272,110 @@ void AppCommandServerTest::closeFlavorsDefaultToActiveTab()
     QCOMPARE(response.value(QStringLiteral("ok")).toBool(), true);
     QCOMPARE(m_session->tabs()->count(), 1);
     QCOMPARE(m_session->tabs()->tabID(0), QStringLiteral("tab-1"));
+}
+
+void AppCommandServerTest::settingsListAndGet()
+{
+    // settings.list carries every documented key with its default value.
+    const QJsonObject list = send(QStringLiteral("settings.list"));
+    QCOMPARE(list.value(QStringLiteral("ok")).toBool(), true);
+    const QJsonObject values = list.value(QStringLiteral("data")).toObject()
+                                   .value(QStringLiteral("settings")).toObject();
+    QCOMPARE(values.count(), 6);
+    QCOMPARE(values.value(QStringLiteral("theme")).toString(), QStringLiteral("system"));
+    QCOMPARE(values.value(QStringLiteral("packet_font_size")).toInt(), 12);
+    QCOMPARE(values.value(QStringLiteral("monospaced_font")).toBool(), true);
+    QCOMPARE(values.value(QStringLiteral("quit_confirmation")).toBool(), false);
+    QCOMPARE(values.value(QStringLiteral("mcp_enabled")).toBool(), false);
+    QCOMPARE(values.value(QStringLiteral("mcp_redaction")).toBool(), true);
+
+    // settings.get answers one typed value; unknown keys are invalid_setting.
+    const QJsonObject got = send(QStringLiteral("settings.get"),
+        {{QStringLiteral("key"), QStringLiteral("packet_font_size")}});
+    QCOMPARE(got.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(got.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("value")).toInt(), 12);
+
+    const QJsonObject unknown = send(QStringLiteral("settings.get"),
+        {{QStringLiteral("key"), QStringLiteral("analytics")}});
+    QCOMPARE(unknown.value(QStringLiteral("ok")).toBool(), false);
+    QCOMPARE(unknown.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("code")).toString(), QStringLiteral("invalid_setting"));
+}
+
+void AppCommandServerTest::settingsSetValidation()
+{
+    // Unknown keys and malformed values answer with the bridge's error codes.
+    QJsonObject response = send(QStringLiteral("settings.set"),
+        {{QStringLiteral("key"), QStringLiteral("analytics")},
+         {QStringLiteral("value"), true}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), false);
+    QCOMPARE(response.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("code")).toString(), QStringLiteral("invalid_setting"));
+
+    response = send(QStringLiteral("settings.set"),
+        {{QStringLiteral("key"), QStringLiteral("theme")},
+         {QStringLiteral("value"), QStringLiteral("midnight")}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), false);
+    QCOMPARE(response.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("code")).toString(), QStringLiteral("invalid_value"));
+
+    response = send(QStringLiteral("settings.set"),
+        {{QStringLiteral("key"), QStringLiteral("packet_font_size")},
+         {QStringLiteral("value"), 9}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), false);
+
+    response = send(QStringLiteral("settings.set"),
+        {{QStringLiteral("key"), QStringLiteral("monospaced_font")},
+         {QStringLiteral("value"), QStringLiteral("maybe")}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), false);
+    // The rejected write leaves the default in place.
+    QCOMPARE(AppSettings::instance()->monospacedFont(), true);
+}
+
+void AppCommandServerTest::settingsSetAndReset()
+{
+    // Every documented value spelling round-trips, including text booleans
+    // and a text font size (the CLI passes values through untouched).
+    QJsonObject response = send(QStringLiteral("settings.set"),
+        {{QStringLiteral("key"), QStringLiteral("theme")},
+         {QStringLiteral("value"), QStringLiteral("dark")}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(response.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("value")).toString(), QStringLiteral("dark"));
+
+    response = send(QStringLiteral("settings.set"),
+        {{QStringLiteral("key"), QStringLiteral("packet_font_size")},
+         {QStringLiteral("value"), QStringLiteral("14")}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(AppSettings::instance()->packetFontSize(), 14);
+
+    response = send(QStringLiteral("settings.set"),
+        {{QStringLiteral("key"), QStringLiteral("mcp_enabled")},
+         {QStringLiteral("value"), QStringLiteral("yes")}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(AppSettings::instance()->mcpEnabled(), true);
+
+    // Reset restores one key to its default.
+    response = send(QStringLiteral("settings.reset"),
+        {{QStringLiteral("key"), QStringLiteral("theme")}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(AppSettings::instance()->theme(), QStringLiteral("system"));
+
+    // The bulk form is gated on confirm=true (upstream reset --all --yes).
+    response = send(QStringLiteral("settings.reset"),
+        {{QStringLiteral("all"), true}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), false);
+    QCOMPARE(response.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("code")).toString(), QStringLiteral("confirm_required"));
+
+    response = send(QStringLiteral("settings.reset"),
+        {{QStringLiteral("all"), true}, {QStringLiteral("confirm"), true}});
+    QCOMPARE(response.value(QStringLiteral("ok")).toBool(), true);
+    const QJsonArray resetKeys = response.value(QStringLiteral("data")).toObject()
+                                     .value(QStringLiteral("reset")).toArray();
+    QCOMPARE(resetKeys.count(), 6);
+    QCOMPARE(AppSettings::instance()->mcpEnabled(), false);
 }
 
 void AppCommandServerTest::mcpHandshakeAndRedaction()

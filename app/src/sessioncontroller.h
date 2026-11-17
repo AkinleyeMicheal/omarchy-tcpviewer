@@ -1,5 +1,6 @@
 #pragma once
 
+#include "appsettings.h"
 #include "daemonclient.h"
 #include "endpointstatsmodel.h"
 #include "packetcolumnlayout.h"
@@ -33,6 +34,9 @@ class SessionController : public QObject
     // (CLI/MCP) reaches through the session.
     Q_PROPERTY(WorkspaceTabsController *tabs READ tabs CONSTANT)
     Q_PROPERTY(EndpointStatisticsModel *endpointStats READ endpointStats CONSTANT)
+    // App settings (theme/fonts/quit/MCP) shared with the command bridge and
+    // Theme.qml via the AppSettings singleton.
+    Q_PROPERTY(AppSettings *settings READ settings CONSTANT)
     Q_PROPERTY(AppCommandServer *appCommands READ appCommands CONSTANT)
     Q_PROPERTY(PacketColumnLayout *columnLayout READ columnLayout CONSTANT)
     Q_PROPERTY(PacketCustomColumns *customColumns READ customColumns CONSTANT)
@@ -112,6 +116,7 @@ public:
     PacketCustomColumns *customColumns() const { return m_customColumns; }
     WorkspaceTabsController *tabs() const { return m_tabs; }
     EndpointStatisticsModel *endpointStats() const { return m_endpointStats; }
+    AppSettings *settings() const { return AppSettings::instance(); }
     AppCommandServer *appCommands() const { return m_appCommands; }
     QString selectedPacketID() const { return m_selectedPacketID; }
     bool startupSplit() const { return qEnvironmentVariableIsSet("TCPVIEWER_SPLIT"); }
