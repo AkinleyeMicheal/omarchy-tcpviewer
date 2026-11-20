@@ -7,8 +7,14 @@ import Omarchy.TCPViewer
 ApplicationWindow {
     id: window
 
-    width: 1440
-    height: 900
+    // CI/screenshot runs can pin the initial window size: the offscreen
+    // platform has no window manager to resize under a test, and the docs
+    // images want a normal desktop window (e.g. 1440x768) instead of the
+    // default 1440x900.
+    readonly property int defaultWindowWidth: 1440
+    readonly property int defaultWindowHeight: 900
+    width: Math.max(minimumWidth, Number(session.envValue("TCPVIEWER_WINDOW_WIDTH")) || defaultWindowWidth)
+    height: Math.max(minimumHeight, Number(session.envValue("TCPVIEWER_WINDOW_HEIGHT")) || defaultWindowHeight)
     minimumWidth: 900
     minimumHeight: 560
     visible: true
